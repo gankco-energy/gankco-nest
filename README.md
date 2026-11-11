@@ -1,4 +1,4 @@
-# GANKCO Nest: version 3.0.4 update (roles and access, Developer tools, PeopleCore admin side)
+# GANKCO Nest: version 3.0.5 update (PeopleCore: Performance, Onboarding & Confirmation, Promotions & Salary Reviews, Competency, Surveys)
 
 *Built to support engineered solutions.*
 
@@ -9,7 +9,34 @@
 - **Emails:** sent by Brevo from **nest-alerts@gankcoenergy.com** as "GANKCO Nest". Sign-in emails use Supabase's custom SMTP (templates in Supabase → Authentication → Emails → Templates). Alert emails use the Brevo API key saved in Supabase Vault as `brevo_api_key`, on a schedule (pg_cron).
 - **DNS (company IT):** `nest` CNAME → `gankco-energy.github.io`, plus the Brevo verification records.
 
-## Install 3.0.4 (about 5 minutes)
+## Install 3.0.5 (about 5 minutes)
+
+1. **Supabase → SQL Editor:** the upgrade comes in **3 parts**. For each of **`21-nest-v3.0.5-upgrade-part1.sql`**, **`part2.sql`** and **`part3.sql`**, in order: open a **New query**, paste the whole file, press **Run**. Parts 1 and 2 end with *Part N of 3 done*; part 3 ends with **Nest 3.0.5 installed**. Each part is all-or-nothing and safe to run again; part 3 can be run again on its own.
+2. **GitHub:** unzip **`gankco-nest-v3.0.5.zip`** and upload everything into **github.com/gankco-energy/gankco-nest**, then commit. Keep the `CNAME` file.
+3. Reload Nest (**Ctrl + Shift + R**). The bottom of each page shows **v3.0.5**.
+4. **Who can do what:** the new modules' permissions are SeamlessHR's own. **HR Admin** got all of them; **HR Officer** got all except deleting and settings. Pay amounts in promotions and salary reviews are only seen with **View salary amounts** (HR Admin has it). Change roles in **PeopleCore → System control → Roles & permissions**.
+5. **Performance** (*Admin → Performance*): GANKCO's setup from SeamlessHR is loaded: the **H1**, **H2** (in progress) and **Probation** cycles, the *Overall Performance* perspective (60%), the four core values (Learning, Team Work, Quality, Integrity, 25% each, 40% of the score), the 1–5 rating scale and the five rating tags. Then:
+   - *Appraisal cycles → H2 → Actions → Edit → step 5:* add the **review committee** (Chairman, Scribe, members).
+   - Staff set their objectives in *Work → Performance* and send them to their line manager, or HR uploads them (*Objectives → Bulk upload*, template inside).
+   - When it is time: *Appraisals & reviews → Open appraisal or review.*
+6. **Onboarding & confirmation** (*Admin → Onboarding & confirmation*): check the onboarding checklist (*Checklists*). For staff already on probation, set their probation length or confirmation date in HRIS; they then show in the *Probation tracker*.
+7. **Promotions:** *Admin → Approval workflow → Promotion & Salary Review Workflow* is line manager → H.O.D → HR → MD/CEO. The Developer or a Super Admin can change it there. Check that the **H.O.D** and **MD/CEO** reporting lines are filled in (*Company settings → Reporting lines*).
+8. **Competency** (*Admin → Competency*): the three categories and the two leadership competencies are loaded. Open each competency and add the **job roles** that need it (required level, severity, time to acquire), then *Assessments → Start assessments*.
+9. **Surveys:** the *Onboarding Experience Survey* (sent to new staff 30 days after they start) and the *Performance Review Survey* are loaded. To send the appraisal survey with an appraisal, choose it in the cycle's setup (step 1).
+10. Daily jobs are scheduled by the install (pg_cron): probation reminders, promotions on their effective date, survey reminders and the onboarding survey.
+11. **PeopleCore** is still **under construction** for everyone except you and the testers (*Nest settings → PeopleCore*). Open it to everyone there when HR is happy.
+
+### What's new in 3.0.5
+- **Performance:** appraisal cycles in five steps (dates, Balanced Score Card perspectives and core values with weights that must total 100%, rating tags, score type, review committee). Staff or their line manager set objectives (KPIs with weight, target, number / % / ₦ / rating / yes-no, higher or lower is better); the line manager approves or returns them; staff record progress and comment. HR can bulk upload objectives for a person, department, job role or the whole company, copy them from another cycle, and freeze them.
+- **Appraisals and reviews:** self-appraisal, then the line manager's scores (or sending it back), potential and recommendation; 360° ratings of core values by peers (picked from the same location) and subordinates; the review committee approves or changes final scores; the line manager reveals the result with a comment; the employee signs it off (agree or disagree; HR is told of a disagreement). The final score blends the employee's and line manager's scores (line manager 70%), takes off disciplinary performance points, and gets a rating tag. Exceptional achievements, nudges, skip / reset / change reviewer.
+- **Improvement plans (PIP):** areas of concern, goals, a default length; the employee accepts or rejects; goals are ticked off; the line manager or HR closes it as passed, extended or not passed.
+- **Reports and nine-box:** rating tags, average score by department, the nine-box matrix (final score against potential), and a full export.
+- **Onboarding & confirmation:** a checklist starts by itself when HR adds someone (tasks for HR, the line manager and the new starter); the probation tracker with reminders; the end-of-probation assessment in the Probation cycle; confirm / extend / do not confirm through the Confirmation workflow, written to the job history. No letters.
+- **Promotions & salary reviews:** raised by the line manager or HR with the new job role, paygrade, department, proposed salary (HR only) and effective date; approved through the workflow; applied on the effective date (job role, paygrade, department, salary, job history), then the employee is told. The employee can't see it while it is being decided. Salary reviews for many people after a cycle.
+- **Competency:** categories, the competency library with proficiency levels, the job roles that need each one, assessments (employee, then line manager), and gap analysis by competency and by employee. A cycle can count competency in the appraisal (off by default).
+- **Surveys:** question library (short and long text, one or several choices, dropdown, rating 1–5, yes/no, date, number), surveys sent to everyone, departments, job roles or chosen people, an **anonymous** switch (no names kept; results shown only from 3 responses), reminders, results with charts and export. The onboarding survey and the appraisal survey are sent automatically.
+
+## Install 3.0.4 (already done, for reference)
 
 1. **Supabase → SQL Editor:** the upgrade comes in **4 parts** (one file was too big for the SQL Editor). For each of **`20-nest-v3.0.4-upgrade-part1.sql`** to **`part4.sql`**, in order: open a **New query**, paste the whole file, press **Run**. Parts 1–3 end with *Part N of 4 done*; part 4 ends with **Nest 3.0.4 installed**. Each part is all-or-nothing and safe to run again, so if one fails, fix the cause and run that part again before going on. (You don't need to save the queries.)
 2. **GitHub:** unzip **`gankco-nest-v3.0.4.zip`** and upload everything into **github.com/gankco-energy/gankco-nest**, then commit. Keep the `CNAME` file.
