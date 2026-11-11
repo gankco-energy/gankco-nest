@@ -300,7 +300,7 @@ PF.pages.objectives = { perms: ['view-objective', 'create-objective', 'update-ob
     const up = pcCan('upload-individual-objective', 'upload-department-objective', 'upload-jobrole-objective', 'upload-company-objective');
     return topbar('Objectives', 'Everyone in the cycle, where their objectives stand, and their progress.', pfCycleSelect(cycles, cur)) +
       pcTable('pfall', cols, rows, { noun: 'employee', csv: 'Objectives ' + cur.title, href: r => `#/people/admin/perf/objectives/${cur.id}/${r.employee_id}`, empty: 'Nobody is in this cycle.',
-        actions: (up && !['completed', 'archived'].includes(cur.status) ? `<button class="btn small" type="button" id="pfup">${ico('up')}Bulk upload</button>` : '') + (pcCan('duplicate-objective') && !['completed', 'archived'].includes(cur.status) ? `<button class="btn small" type="button" id="pfcopy">${ico('move')}Copy from a cycle</button>` : ''),
+        actions: (up && cur.status !== 'archived' ? `<button class="btn small" type="button" id="pfup">${ico('up')}${cur.status === 'completed' ? 'Upload past objectives' : 'Bulk upload'}</button>` : '') + (pcCan('duplicate-objective') && !['completed', 'archived'].includes(cur.status) ? `<button class="btn small" type="button" id="pfcopy">${ico('move')}Copy from a cycle</button>` : ''),
         filters: [{ k: 's', l: 'Status', opts: Object.entries(PF_ST).map(([k, v]) => [k, v[1]]), test: (r, v) => v === 'none' ? ['none', 'draft'].includes(r.status) : r.status === v },
           { k: 'u', l: 'Department', opts: pcDepts().filter(u => rows.some(r => r.unit_id === u.id)).map(u => [u.id, u.name]), test: (r, v) => r.unit_id === +v }] });
   },
@@ -321,12 +321,12 @@ async function pfReadSheet(file) {
   } else if (['csv', 'txt'].includes(ext)) {
     (await file.text()).replace(/^﻿/, '').split(/\r?\n/).filter(l => l.trim()).forEach(l => rows.push(l.split(/,(?=(?:[^"]*"[^"]*")*[^"]*$)/).map(c => c.trim().replace(/^"|"$/g, '').replace(/""/g, '"'))));
   } else throw new Error('Use an Excel (.xlsx) or CSV file');
-  const head = (rows.shift() || []).map(h => String(h || '').trim().toLowerCase().replace(/[^a-z]+/g, '_').replace(/^_|_$/g, ''));
+  const head = (rows.shift() || []).map(h => String(h || '').trim().toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, ''));
   const alias = { applies_to: 'scope', for: 'scope', employee: 'who', name: 'who', objective: 'title', kpi: 'title', due: 'due_date', measured_as: 'measure', better_when: 'direction' };
   return rows.map(r => Object.fromEntries(head.map((h, i) => [alias[h] || h, r[i] == null ? '' : String(r[i]).trim()]))).filter(r => r.title || r.who);
 }
 async function pfUpload(cur) {
-  return modal({ title: 'Bulk upload objectives', sub: `Into ${esc(cur.title)}. One row per objective. A row can be for one person, a department, a job role or the whole company.`, submit: 'Upload', wide: true,
+  return modal({ title: cur.status === 'completed' ? 'Upload past objectives' : 'Bulk upload objectives', sub: `Into ${esc(cur.title)}. One row per objective. A row can be for one person, a department, a job role or the whole company.${cur.status === 'completed' ? ' The cycle is completed, so these go in as approved past records.' : ''}`, submit: 'Upload', wide: true,
     body: `<ol class="pf-upsteps"><li>Download the template and fill it in. <button class="btn small" type="button" id="pftpl">${ico('down')}Template</button></li>
       <li><b>scope</b> is employee, department, job role or company. <b>who</b> is the staff ID, email or name, or the department or job role name (empty for company).</li>
       <li><b>measure</b> is number, %, ₦, rating or yes/no. <b>direction</b> is up (higher is better) or down. Each person’s objectives in a perspective should add up to 100%.</li></ol>

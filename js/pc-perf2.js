@@ -24,6 +24,31 @@ function paStepper(st, kind, arc) {
   return `<ol class="pa-steps">${steps.map(([k, l], i) => `<li class="${i < at || st === 'completed' ? 'done' : i === at ? 'on' : ''}"><span>${i < at || st === 'completed' ? '✓' : i + 1}</span>${esc(l)}</li>`).join('')}</ol>`;
 }
 
+// 3.0.5u: past appraisal results, from before Nest. They show on the staff Appraisal tab, in reports and on the nine-box.
+const PA_PAST_COLS = [{ k: 'who', l: 'who', w: 26 }, { k: 'cycle', l: 'cycle', w: 26 }, { k: 'year', l: 'year', w: 8 }, { k: 'final_score', l: 'final_score', w: 12 }, { k: 'rating', l: 'rating', w: 18 }, { k: 'potential', l: 'potential', w: 11 }, { k: 'comments', l: 'comments', w: 50 }];
+const PA_PAST_NOTES = [['who', 'Staff ID, work email or full name.'], ['cycle', 'The cycle name, for example “2025 Appraisal”. A name not in Nest is added as a completed cycle.'],
+  ['year', 'Optional. The cycle’s year, for a new cycle.'], ['final_score', 'The final score out of 100.'], ['rating', 'Optional. A rating tag name. Empty works it out from the score.'],
+  ['potential', 'Optional. low, average or high. Used for the nine-box.'], ['comments', 'Optional.']];
+function paPastUpload() {
+  return pcUploadDlg({ title: 'Upload past appraisal results', sub: 'Results from before Nest. Each one shows as a past record on the person’s Appraisal tab, in reports and on the nine-box. Uploading the same person and cycle again updates it.',
+    notes: PA_PAST_NOTES.slice(0, 2).concat([['Past objectives', 'Optional: open the cycle under Objectives and use Bulk upload.']]),
+    template: () => pcXlsx('Past appraisal results template.xlsx', PA_PAST_COLS, [{ who: 'GES0042026', cycle: '2025 Appraisal', year: 2025, final_score: 78.5, rating: '', potential: 'high', comments: 'Strong year on the Mahin jobs' }], { sheet: 'Results', notes: PA_PAST_NOTES }),
+    run: rows => q(sb.rpc('hr_perf_historic_upload', { p_rows: rows })),
+    done: r => `${plural(r.added, 'result')} added${r.updated ? `, ${plural(r.updated, 'result')} updated` : ''}` });
+}
+// 3.0.5u: a past result uploaded from before Nest: only the outcome was recorded
+function paHistoricHtml(d, card, show, box, can) {
+  const a = d.appraisal;
+  return `<section class="panel pf-head"><div class="body">
+      <div class="pf-who">${hrAv(card, 'lg')}<div><h2>${esc(d.employee.name)}</h2><div class="sub">${esc(card.title || '')}</div>
+        <div class="hr-chips">${pcChip('muted', 'Past record')}${pcChip('muted', d.cycle.title)}</div></div></div>
+      ${show ? `<div class="pa-final"><div class="pa-fs">${pfPct(a.final_score)}</div>${d.tag ? pcChip(d.tag.color, d.tag.name) : ''}<small>Final score</small></div>` : ''}</div></section>
+    <section class="panel pa-res"><header><h2>Result</h2></header><div class="body">
+      <p class="muted">This result was uploaded from before Nest. Only the outcome was recorded, not the scores behind it.</p>
+      ${show && box && (!can.self || pfCfg().see_ninebox) ? `<div class="pa-break"><div><small>Nine-box</small><b class="pa-nb">${esc(paBoxName(box))}</b><span>${esc(PA_POT.find(x => x[0] === a.potential)?.[1] || '')}</span></div></div>` : ''}
+      ${a.mgr_comment ? `<p class="pa-q"><b>Comments:</b> ${esc(a.mgr_comment)}</p>` : ''}</div></section>`;
+}
+
 // ================================================================ one appraisal (every role sees it through this)
 function paHtml(d, ctx) {
   const can = d.can || {};
@@ -59,6 +84,7 @@ function paHtml(d, ctx) {
     can.reroute && !['completed', 'skipped'].includes(a.status) ? `<button class="btn" type="button" data-pa="reroute">${ico('move')}Change reviewer</button>` : '',
     can.reset ? `<button class="btn" type="button" data-pa="${a.status === 'skipped' ? 'unskip' : 'skip'}">${a.status === 'skipped' ? 'Bring back' : 'Skip'}</button>${a.status !== 'self' ? `<button class="btn danger" type="button" data-pa="reset">Reset</button>` : ''}` : ''].join('');
   const box = paBox(a.final_score, a.potential);
+  if (a.historic) return paHistoricHtml(d, card, showRes || (a.final_score != null && !can.self), box, can);
   return `<section class="panel pf-head"><div class="body">
       <div class="pf-who">${hrAv(card, 'lg')}<div><h2>${esc(d.employee.name)}</h2><div class="sub">${esc(card.title || '')}${d.employee.manager ? ` · Reviewer: <b>${esc(d.employee.manager)}</b>` : ''}</div>
         <div class="hr-chips">${pcChip(...PA_ST[a.status])}${pcChip('muted', p.title)}<span class="muted">${fd(p.start_date)} – ${fd(p.end_date)}${p.status === 'closed' ? ' · closed' : ''}</span></div></div></div>
@@ -86,7 +112,7 @@ function paHtml(d, ctx) {
       ${!editS && !editM && !a.self_comment && !a.mgr_comment ? '<div class="muted">No comments yet.</div>' : ''}</div></section>
     ${pfCfg().state_achievements !== false || ach.length ? `<section class="panel"><header><h2>Exceptional achievements</h2>${can.achieve ? `<span class="right"><button class="btn small" type="button" data-pa="ach">${ico('plus')}Add</button></span>` : ''}</header>
       ${ach.length ? `<ul class="list">${ach.map(x => `<li><div class="main"><div class="name">${esc(x.title)} ${x.category ? pcChip('muted', x.category) : ''} ${pcChip(x.status === 'verified' ? 'ok' : x.status === 'rejected' ? 'rejected' : 'pending', x.status === 'verified' ? 'Verified' : x.status === 'rejected' ? 'Not verified' : 'Waiting for the line manager')}</div>
-        <div class="sub">${esc(x.description || '')}${x.given_by_name ? ` · added by ${esc(x.given_by_name)}` : ''}</div></div>${can.verify && x.status === 'pending' ? `<span class="pc-acts"><button class="btn small" data-achv="${x.id}" data-st="verified">Verify</button><button class="btn small" data-achv="${x.id}" data-st="rejected">Reject</button></span>` : ''}</li>`).join('')}</ul>` : '<div class="empty">None added.</div>'}</section>` : ''}
+        <div class="sub">${esc(x.description || '')}${x.given_by_name ? ` · added by ${esc(x.given_by_name)}` : ''}</div></div><span class="pc-acts">${can.verify && x.status === 'pending' ? `<button class="btn small" data-achv="${x.id}" data-st="verified">Verify</button><button class="btn small" data-achv="${x.id}" data-st="rejected">Reject</button>` : ''}${(x.status === 'pending' && x.given_by === hrMe()?.id) || pcCan('verify-exceptional-achievement') ? `<button class="btn small pf-ib" type="button" data-achdel="${x.id}" data-t="${esc(x.title)}" title="Remove" aria-label="Remove">${ico('trash')}</button>` : ''}</span></li>`).join('')}</ul>` : '<div class="empty">None added.</div>'}</section>` : ''}
     ${d.raters ? `<section class="panel"><header><h2>Peers & subordinates (360°)</h2><span class="meta">${d.raters.filter(r => r.status === 'done').length} of ${d.raters.length} done</span>${can.raters ? `<span class="right"><button class="btn small" type="button" data-pa="addrater">${ico('plus')}Add a colleague</button></span>` : ''}</header>
       ${d.raters.length ? `<ul class="list">${d.raters.map(r => `<li><div class="main"><div class="name">${esc(r.name || (r.kind === 'peer' ? 'A peer' : 'A subordinate'))}</div><div class="sub">${r.kind === 'peer' ? 'Peer' : 'Subordinate'}</div></div>${pcChip(r.status === 'done' ? 'ok' : 'pending', r.status === 'done' ? 'Done' : 'Waiting')}${can.raters && r.status !== 'done' ? `<button class="btn small pf-ib" data-delrater="${r.id}" title="Remove">${ico('trash')}</button>` : ''}</li>`).join('')}</ul>` : '<div class="empty">Nobody is asked to rate this person.</div>'}</section>` : ''}`;
 }
@@ -109,6 +135,8 @@ function paBind(main) {
   const editable = () => d().can.self_edit || d().can.mgr_edit || d().can.rate;
   const again = async () => { if (editable() && $('[data-sc]', main)) await save().catch(() => {}); render({ quiet: true }); };
   main.addEventListener('click', async e => {
+    const xd = e.target.closest('[data-achdel]'); if (xd) { if (!await pcConfirm('Remove this achievement?', `“${esc(xd.dataset.t)}” comes off the appraisal.`, 'Remove')) return;
+      await pcTry(() => q(sb.rpc('hr_perf_achievement_decide', { p_id: +xd.dataset.achdel, p_status: 'delete' })), 'Achievement removed'); return again(); }
     const v = e.target.closest('[data-achv]'); if (v) { await pcTry(() => q(sb.rpc('hr_perf_achievement_decide', { p_id: +v.dataset.achv, p_status: v.dataset.st })), v.dataset.st === 'verified' ? 'Verified' : 'Not verified'); return again(); }
     const dr = e.target.closest('[data-delrater]'); if (dr) { await pcTry(() => q(sb.rpc('hr_perf_appr_admin', { p_id: d().id, p_action: 'remove_rater', p_data: { rater_id: +dr.dataset.delrater } })), 'Removed'); return again(); }
     const b = e.target.closest('[data-pa]'); if (!b) return; const act = b.dataset.pa; const nm = esc(d().employee.name);
@@ -316,6 +344,7 @@ PF.pages.appraisals = { perms: ['view-employee-appraisal-status', 'view-appraisa
       return topbar(`${esc(d.employee.name)} · ${esc(d.period.title)}`, esc(d.cycle.title), `<a class="btn" href="#/people/admin/perf/appraisals?p=${d.period.id}&cycle=${d.cycle.id}">Back to the list</a>`) + paHtml(d, 'admin'); }
     const cycles = await pfCycles(true); const cur = this.cur = pfPick(cycles, params.cycle);
     const head = topbar('Appraisals & reviews', 'Open an appraisal or a mid-cycle review, follow it, and step in where needed.', (cycles.length ? pfCycleSelect(cycles, cur) : '') +
+      (pcCan('upload-individual-scores') ? `<button class="btn" id="perpast">${ico('up')}Upload past results</button>` : '') +
       (cur?.status === 'active' && pcCan('create-appraisal-period', 'create-performance-review') ? `<button class="btn primary" id="pernew">${ico('plus')}Open appraisal or review</button>` : ''));
     if (!cur) return head + '<section class="panel"><div class="pc-empty-hero"><b>No appraisal cycles yet</b></div></section>';
     const periods = this.periods = await q(sb.from('hr_perf_periods').select('*').eq('cycle_id', cur.id).order('start_date', { ascending: false }));
@@ -343,6 +372,7 @@ PF.pages.appraisals = { perms: ['view-employee-appraisal-status', 'view-appraisa
     if (this.mode === 'appr') return paBind(main);
     const s = $('#pfcyc', main); if (s) s.onchange = () => go('#/people/admin/perf/appraisals?cycle=' + s.value);
     const nb = $('#pernew', main); if (nb) nb.onclick = () => paPeriodForm(this.cur);
+    const pp = $('#perpast', main); if (pp) pp.onclick = () => paPastUpload();
     const pa = $('#peract', main); if (pa) pa.onchange = async () => { const a = pa.value; pa.value = ''; const per = this.per; if (!a) return;
       if (a === 'edit') return paPeriodForm(this.cur, per);
       if (a === 'extend') return pcEdit({ title: 'Change the end date', wide: false, fields: [{ k: 'd', l: 'New end date', t: 'date', req: true }], vals: { d: per.end_date },

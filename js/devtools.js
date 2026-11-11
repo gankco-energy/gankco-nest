@@ -13,7 +13,9 @@ function devConfirm({ title, expect, sub, run, submit = 'Remove' }) {
 
 const DEV_TABS = [
   ['requests', 'Materials requests', 'truck'], ['counts', 'Monthly counts', 'count'], ['po', 'Purchase orders', 'audit'], ['planner', 'Job planner', 'plan'],
-  ['signoffs', 'Sign-offs', 'sign'], ['unused', 'Unused records', 'box'], ['signups', 'Sign-ups', 'user'], ['people', 'PeopleCore', 'users']];
+  ['signoffs', 'Sign-offs', 'sign'], ['unused', 'Unused records', 'box'], ['signups', 'Sign-ups', 'user'], ['people', 'PeopleCore', 'users'], ['talent', 'Performance & talent', 'target']];
+// 3.0.5u: steps an appraisal can be sent back to
+const DEV_STEPS = [['self', 'Self-appraisal'], ['manager', 'Line manager'], ['arc', 'Review committee (ARC)'], ['reveal', 'Reveal'], ['employee', 'Employee sign-off']];
 const COUNT_ST = { in_progress: ['pending', 'In progress'], rejected: ['rejected', 'Sent back'], submitted: ['soon', 'Submitted'], verified: ['ok', 'Approved'] };
 const DEV = { tab: 'requests', q: '' };
 
@@ -72,11 +74,41 @@ ROUTES.devtools = {
         + list('Locations', plural(S.locs.length, 'location'), S.locs.filter(l => !l.is_placeholder).map(l => row(esc(l.name), l.active ? 'Open' : 'Closed', '', btn(`data-loc="${l.id}"`, 'Delete if unused'))), 'No locations.')
         + list('Categories', plural(S.cats.length, 'category', 'categories'), S.cats.map(c => row(esc(c.name), esc(lineShort(c.department_id)), '', btn(`data-cat="${c.id}"`, 'Delete if unused'))), 'No categories.');
     } else if (t === 'signups') {
-      await loadLookups();
+      const [, allow] = await Promise.all([loadLookups(), q(sb.rpc('dev_signup_allow', { p_email: null, p_add: null })).catch(() => [])]);
       const rows = Object.values(S.people).filter(p => p.role === 'pending');
       this.data.rows = rows;
       body = list('Sign-ups waiting for approval', plural(rows.length, 'sign-up'), rows.map(p => row(esc(p.full_name || '—'), `${esc(p.email)} · signed up ${fd(p.created_at)}`, '', btn(`data-su="${p.id}"`, 'Remove'))), 'Nobody is waiting.',
-        'Removing a sign-up deletes the account, so the email can sign up again. To stop someone who was approved, set their Access to No access in Team &amp; access.');
+        'Removing a sign-up deletes the account, so the email can sign up again. To stop someone who was approved, set their Access to No access in Team &amp; access.')
+        + `<section class="panel"><header><h2>Allowed outside emails</h2><span class="meta">${plural(allow.length, 'email')}</span></header>
+          <div class="body muted">Only ${esc(CFG.SIGNUP_DOMAIN ? '@' + CFG.SIGNUP_DOMAIN : 'company')} emails, or the email HR has on someone’s PeopleCore record, can create an account. That rule stays on. Add an exact address here to let it sign up too, for example a Gmail for the Developer. New sign-ups still wait for approval.</div>
+          <form class="filters" id="dev-allow"><input type="email" name="email" placeholder="name@gmail.com" required autocomplete="off"><button class="btn primary" type="submit">${ico('plus')}Allow this email</button></form>
+          ${allow.length ? `<ul class="list devlist">${allow.map(a => row(esc(a.email), `Added by ${esc(a.by || '—')} · ${fd(a.at)}`, a.signed_up ? chip('ok', 'Signed up') : chip('muted', 'Not signed up yet'), btn(`data-unallow="${esc(a.email)}"`, 'Remove'))).join('')}</ul>` : '<div class="empty">No outside emails allowed.</div>'}</section>`;
+    } else if (t === 'talent') {
+      const L = await q(sb.rpc('dev_hr_list')); this.data = { L };
+      const lc = x => esc(String(x || '').toLowerCase());
+      const r2 = (s2, main, sub, chipHtml, btns) => `<li data-s="${lc(s2)}"><div class="main"><div class="name">${main}</div><div class="sub">${sub}</div></div><div class="end">${chipHtml || ''} ${btns}</div></li>`;
+      const sec = (title, rows, empty, note) => list(title, plural(rows.length, 'record'), rows, empty, note);
+      const past = x => x.historic ? ' ' + chip('muted', 'Past record') : '';
+      const st = v => chip('muted', String(v || '').replace(/_/g, ' ').replace(/^./, c => c.toUpperCase()));
+      body = `<div class="filters"><input type="search" id="dev-hq" placeholder="Filter by person, cycle or survey" value="${esc(DEV.hq || '')}"></div>`
+        + sec('Objectives', L.plans.map(x => r2(`${x.name} ${x.cycle}`, `<b>${esc(x.name)}</b>`, `${esc(x.cycle)} · ${plural(x.objectives, 'objective')}`, st(x.status),
+            (x.status !== 'draft' ? btn(`data-dh="plan_reopen" data-id="${x.id}" data-x="${esc(x.name)}"`, 'Back to draft', 'undo') : '') + btn(`data-dh="plan_delete" data-id="${x.id}" data-x="${esc(x.name)}"`, 'Delete plan'))), 'No objectives yet.',
+            '“Back to draft” reverses an approval so the person can change their objectives. Deleting a plan removes all of that person’s objectives in the cycle.')
+        + sec('Appraisals and reviews', L.appraisals.map(x => r2(`${x.name} ${x.cycle} ${x.period}`, `<b>${esc(x.name)}</b>`, `${esc(x.cycle)} · ${esc(x.period)}${x.score != null ? ' · ' + pfPct(x.score) : ''}`, chip('muted', (PA_ST[x.status] || [0, x.status])[1]) + past(x),
+            (!x.historic && x.status !== 'self' ? btn(`data-dstep="${x.id}" data-x="${esc(x.name)}" data-st="${x.status}"`, 'Send back', 'undo') : '') + btn(`data-dh="appraisal_delete" data-id="${x.id}" data-x="${esc(x.name)}"`, 'Delete'))), 'No appraisals yet.',
+            'Send back moves an appraisal to an earlier step; scores already given stay so they can be changed. A completed one can be sent back too.')
+        + sec('Appraisal periods', L.periods.map(x => r2(`${x.title} ${x.cycle}`, `<b>${esc(x.title)}</b>`, `${esc(x.cycle)} · ${plural(x.appraisals, 'appraisal')}`, st(x.status), btn(`data-dh="period_delete" data-id="${x.id}" data-x="${esc(x.title)}"`, 'Delete with data'))), 'No periods.')
+        + sec('Appraisal cycles', L.cycles.map(x => r2(x.title, `<b>${esc(x.title)}</b>`, `${x.kind === 'probation' ? 'Probation · ' : ''}${plural(x.plans, 'objective plan')} · ${plural(x.appraisals, 'appraisal')}`, st(x.status), btn(`data-dh="cycle_delete" data-id="${x.id}" data-x="${esc(x.title)}"`, 'Delete with data'))), 'No cycles.',
+            'Deleting a cycle removes its periods, objectives, appraisals and scores.')
+        + sec('Approved confirmations', L.confirmations.map(x => r2(x.name, `<b>${esc(x.name)}</b>`, `${esc((CF_DEC[x.decision] || [0, x.decision])[1])} · from ${fd(x.effective)}`, chip('ok', 'Approved') + past(x), btn(`data-dh="confirmation_reverse" data-id="${x.id}" data-x="${esc(x.name)}"`, 'Reverse', 'undo'))), 'No approved confirmations.',
+            'Reversing puts the person back on probation with their old due date (or takes an extension back off) and removes the job history line.')
+        + sec('Applied promotions and salary reviews', L.promotions.map(x => r2(x.name, `<b>${esc(x.name)}</b>`, `${x.kind === 'promotion' ? 'Promotion' : 'Salary review'} · from ${fd(x.effective)}`, chip('ok', 'Applied') + past(x), btn(`data-dh="promotion_reverse" data-id="${x.id}" data-x="${esc(x.name)}"`, 'Reverse', 'undo'))), 'None applied yet.',
+            'Reversing restores the job role, paygrade, department and salary from before, and removes the job history line. A past record only loses its history line.')
+        + sec('Improvement plans (PIP)', L.pips.map(x => r2(x.name, `<b>${esc(x.name)}</b>`, esc(x.title || ''), st(x.status), btn(`data-dh="pip_delete" data-id="${x.id}" data-x="${esc(x.name)}"`, 'Delete'))), 'No PIPs.')
+        + sec('Competency assessments', L.comps.map(x => r2(x.name, `<b>${esc(x.name)}</b>`, fd(x.at), st(x.status) + past(x), btn(`data-dh="comp_delete" data-id="${x.id}" data-x="${esc(x.name)}"`, 'Delete'))), 'No assessments.')
+        + sec('Onboardings', L.onbs.map(x => r2(x.name, `<b>${esc(x.name)}</b>`, x.start ? 'Started ' + fd(x.start) : '', st(x.status) + past(x), btn(`data-dh="onb_delete" data-id="${x.id}" data-x="${esc(x.name)}"`, 'Delete'))), 'No onboardings.')
+        + sec('Survey answers', L.responses.map(x => r2(`${x.name} ${x.survey}`, `<b>${esc(x.name)}</b>`, `${esc(x.survey)} · ${fd(x.on)}`, '', btn(`data-dh="survey_response_delete" data-id="${x.id}" data-x="${esc(x.name)}"`, 'Delete answers'))), 'No answers to named surveys.',
+            'Only surveys that aren’t anonymous. The person can then answer again.');
     } else if (t === 'people') {
       const nm = e => e ? `${e.first_name || ''} ${e.last_name || ''}`.trim() : '—';
       const [reqs, rqs, exits, cases, anns, emps] = await Promise.all([
@@ -91,13 +123,13 @@ ROUTES.devtools = {
       this.data = { emps };
       body = list('Requests (leave and others)', plural(reqs.length, 'request'), reqs.filter(r => !linked.has(r.id)).map(r => row(`<b>${esc(r.title || r.kind)}</b>`, `Request ${r.id} · ${esc(nm(r.employee))} · ${fd(r.created_at)}`, chip('muted', r.status), btn(`data-hr="request" data-id="${r.id}" data-x="Request ${r.id}"`, 'Delete'))), 'No requests.')
         + list('Requisitions', plural(rqs.length, 'requisition'), rqs.map(r => row(`<b>${esc(r.title || r.kind)}</b>`, `Requisition ${r.id} · ${fd(r.created_at)}`, '', btn(`data-hr="requisition" data-id="${r.id}" data-x="Requisition ${r.id}"`, 'Delete'))), 'No requisitions.')
-        + list('Exits', plural(exits.length, 'exit'), exits.map(x => row(`<b>${esc(empName(x.employee_id))}</b>`, `Exit ${x.id} · ${fd(x.created_at)}`, chip('muted', x.status), btn(`data-hr="exit" data-id="${x.id}" data-x="Exit ${x.id}"`, 'Delete'))), 'No exits.', 'Deleting an exit puts the person back to Active if the exit had completed.')
+        + list('Exits', plural(exits.length, 'exit'), exits.map(x => row(`<b>${esc(empName(x.employee_id))}</b>`, `Exit ${x.id} · ${fd(x.created_at)}`, st(x.status), btn(`data-hr="exit" data-id="${x.id}" data-x="Exit ${x.id}"`, 'Delete'))), 'No exits.', 'Deleting an exit puts the person back to Active if the exit had completed.')
         + list('Disciplinary and grievance cases', plural(cases.length, 'case'), cases.map(c => row(`<b>${esc(c.title || c.kind)}</b>`, `${esc(c.case_no || 'Case ' + c.id)} · ${fd(c.created_at)}`, chip('muted', c.status), btn(`data-hr="case" data-id="${c.id}" data-x="${esc(c.case_no || 'Case ' + c.id)}"`, 'Delete'))), 'No cases.')
         + list('Announcements', plural(anns.length, 'announcement'), anns.map(a => row(`<b>${esc(a.title)}</b>`, fd(a.created_at), '', btn(`data-hr="announcement" data-id="${a.id}" data-x="${esc(a.title)}"`, 'Delete'))), 'No announcements.')
         + list('Test employees', plural(emps.length, 'employee'), emps.map(e => row(`<b>${esc(nm(e))}</b>`, `${esc(e.emp_no || '')} · ${esc(e.status)}`, '', btn(`data-hr="employee" data-id="${e.id}" data-x="${esc(nm(e))}"`, 'Delete if nothing attached'))), 'No employees.',
           'An employee can only be removed when nothing is attached: no requests, leave, documents, cases, crew or people reporting to them.');
     }
-    return topbar('Developer tools', 'Reverse test requests, reset monthly counts and remove test or unused records. Each one asks you to type its number to confirm, and the audit log keeps a full copy.')
+    return topbar('Developer tools', 'Reverse test requests and approvals, reset monthly counts and remove test or unused records. Each one asks you to type its number to confirm, and the audit log keeps a full copy.')
       + `<div class="devtabs" role="tablist">${DEV_TABS.map(([k, l, i]) => `<button type="button" data-tab="${k}" class="${t === k ? 'on' : ''}">${ico(i)}${l}</button>`).join('')}</div>` + body;
   },
   bind(main) {
@@ -131,5 +163,23 @@ ROUTES.devtools = {
       devConfirm({ title: 'Remove sign-up', expect: p.email, run: async x => { await q(sb.rpc('dev_delete_signup', { p_user: p.id, p_confirm: x })); await loadLookups(); done('Sign-up removed'); } }); });
     $$('[data-hr]', main).forEach(b => b.onclick = () => devConfirm({ title: `Delete ${b.dataset.x}`, expect: b.dataset.x,
       run: async x => { await q(sb.rpc('dev_delete_hr', { p_kind: b.dataset.hr, p_id: +b.dataset.id, p_confirm: x })); done('Deleted'); } }));
+    // 3.0.5u: PeopleCore reverse
+    const hq = $('#dev-hq', main); if (hq) { const f = () => { DEV.hq = hq.value; const t2 = hq.value.trim().toLowerCase(); $$('li[data-s]', main).forEach(li => { li.hidden = !!t2 && !li.dataset.s.includes(t2); }); }; hq.oninput = f; f(); }
+    const DH = { plan_reopen: ['Objectives back to draft', 'Back to draft'], plan_delete: ['Delete objectives', 'Delete plan'], appraisal_delete: ['Delete appraisal', 'Delete'], period_delete: ['Delete period and its appraisals', 'Delete'],
+      cycle_delete: ['Delete cycle and everything in it', 'Delete'], confirmation_reverse: ['Reverse confirmation', 'Reverse'], promotion_reverse: ['Reverse', 'Reverse'], pip_delete: ['Delete PIP', 'Delete'],
+      comp_delete: ['Delete competency assessment', 'Delete'], onb_delete: ['Delete onboarding', 'Delete'], survey_response_delete: ['Delete survey answers', 'Delete'] };
+    $$('[data-dh]', main).forEach(b => b.onclick = () => { const k = b.dataset.dh;
+      devConfirm({ title: DH[k][0], expect: b.dataset.x, submit: DH[k][1], sub: esc(b.closest('li')?.querySelector('.sub')?.textContent || ''),
+        run: async x => { const m = await q(sb.rpc('dev_hr_reverse', { p_kind: k, p_id: +b.dataset.id, p_confirm: x, p_data: {} })); pcInvalidate?.(); done(m || 'Done'); } }); });
+    $$('[data-dstep]', main).forEach(b => b.onclick = () => { const at = DEV_STEPS.findIndex(([k]) => k === b.dataset.st); const opts = (at < 0 ? DEV_STEPS : DEV_STEPS.slice(0, at)).map(([k, l]) => opt(k, l, '')).join('');
+      modal({ title: `Send ${b.dataset.x}’s appraisal back`, submit: 'Send back', danger: true, sub: 'Scores already given stay, so they can be changed.',
+        body: `<label class="f">Back to<select name="to">${opts}</select></label><div class="notice bad devwarn">${ico('wrench')}<span>A full copy is kept in the audit log.</span></div><label class="f">Type <b class="mono">${esc(b.dataset.x)}</b> to confirm<input name="confirm" autocomplete="off" spellcheck="false"></label>`,
+        onOpen: d => { const i = $('[name=confirm]', d), s2 = $('button[type=submit]', d); const chk = () => { s2.disabled = i.value.trim().toLowerCase() !== b.dataset.x.trim().toLowerCase(); }; i.oninput = chk; chk(); },
+        onSubmit: async x => { const m = await q(sb.rpc('dev_hr_reverse', { p_kind: 'appraisal_step', p_id: +b.dataset.dstep, p_confirm: x.confirm.trim(), p_data: { to: x.to } })); done(m); } }); });
+    // 3.0.5u: allowed outside emails
+    const fa = $('#dev-allow', main); if (fa) fa.onsubmit = async e => { e.preventDefault(); const em = fa.email.value.trim(); if (!em) return;
+      try { await q(sb.rpc('dev_signup_allow', { p_email: em, p_add: true })); done(`${em} can now sign up`); } catch (x) { toast(niceError(x), true); } };
+    $$('[data-unallow]', main).forEach(b => b.onclick = async () => { if (!await pcConfirm('Remove this email?', `${esc(b.dataset.unallow)} won’t be able to sign up. An account it already made stays.`, 'Remove')) return;
+      try { await q(sb.rpc('dev_signup_allow', { p_email: b.dataset.unallow, p_add: false })); done('Removed'); } catch (x) { toast(niceError(x), true); } });
   }
 };

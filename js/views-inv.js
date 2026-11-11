@@ -470,8 +470,42 @@ async function exportInventory(kind, rows) {
 }
 
 // ---------------------------------------------------------------- item editor (admin)
-const SVC_OPTS = (cur, bulk) => [[bulk ? 'none' : '', 'No idle-service rule'], ['6', '6 months'], ['12', '12 months (1 year)'], ['18', '18 months'], ['24', '24 months (2 years)']]
-  .map(([v, l]) => opt(v, l, cur == null ? (bulk ? undefined : '') : String(cur))).join('');
+// 3.0.5: the idle-service rule. Presets of 6/12/18/24 months, or Custom: a number of days, weeks or months.
+// mode: 'item' (no rule allowed) · 'bulk' (adds "No change") · 'rule' (the item page's Change rule)
+const SVC_PRESETS = [['6', '6 months'], ['12', '12 months (1 year)'], ['18', '18 months'], ['24', '24 months (2 years)']];
+const svcRuleText = (n, u) => n ? `${n} ${u || 'month'}${+n === 1 ? '' : 's'}` : '';
+function svcFields(cur, unit, mode) {
+  unit = unit || 'month';
+  const preset = cur != null && unit === 'month' && SVC_PRESETS.some(([v]) => +v === +cur);
+  const sel = cur == null ? (mode === 'bulk' ? '_keep' : '') : preset ? String(cur) : 'custom';
+  const o = [...(mode === 'bulk' ? [['_keep', 'No change'], ['none', 'Remove the rule']] : [['', 'No idle-service rule']]), ...SVC_PRESETS, ['custom', 'Custom…']];
+  const today = localISO(0);
+  return `<div class="svc-rule">
+    <label class="f">Service if idle on the shelf<span class="hint">Nest reminds the line admin when the tool hasn’t been used or serviced for this long. The clock runs from the last time it was issued on a job or serviced.</span>
+      <select name="svc_rule" data-svc>${o.map(([v, l]) => opt(v, l, sel)).join('')}</select></label>
+    <div class="row2" data-svc-custom ${sel === 'custom' ? '' : 'hidden'}>
+      <label class="f">Every<input type="number" name="svc_n" min="1" max="3650" step="1" value="${sel === 'custom' ? esc(cur) : ''}" placeholder="e.g. 90"></label>
+      <label class="f">Unit<select name="svc_u">${opt('day', 'Days', unit)}${opt('week', 'Weeks', unit)}${opt('month', 'Months', unit)}</select></label></div>
+    <label class="f" data-svc-last ${sel && sel !== '_keep' && sel !== 'none' ? '' : 'hidden'}>Last serviced on<span class="hint">Optional. If it was serviced before it came into Nest, enter the date so the clock starts from there. No future dates.</span>
+      <input type="date" name="svc_last" max="${today}"></label></div>`;
+}
+function wireSvc(d) {
+  const s = $('[data-svc]', d); if (!s) return;
+  const on = () => { $('[data-svc-custom]', d).hidden = s.value !== 'custom'; $('[data-svc-last]', d).hidden = !s.value || s.value === '_keep' || s.value === 'none'; };
+  s.addEventListener('change', on); on();
+}
+// → undefined (no change), null (no rule), or { every, unit, last }
+function svcRead(x) {
+  const v = x.svc_rule;
+  if (v === '_keep') return undefined;
+  if (!v || v === 'none') return null;
+  if (x.svc_last && x.svc_last > localISO(0)) throw new Error('“Last serviced on” can’t be in the future.');
+  if (v !== 'custom') return { every: +v, unit: 'month', last: x.svc_last || null };
+  const n = Math.round(+x.svc_n);
+  if (!n || n < 1) throw new Error('Enter how often, for example 90 days.');
+  if (n > 3650) throw new Error('That rule is too long. Use a smaller number or a bigger unit.');
+  return { every: n, unit: x.svc_u || 'month', last: x.svc_last || null };
+}
 function editItem(it) {
   const isNew = !it;
   const myTeam = it?.department_id || S.depts.find(d => canAdmin(d.id))?.id;
@@ -485,20 +519,22 @@ function editItem(it) {
       <div class="row2"><label class="f">Reorder at (min)<span class="hint">Alert when the in-store quantity falls to this.</span><input type="number" step="any" min="0" name="min_qty" value="${esc(it?.min_qty)}"></label>
       <label class="f">Restock up to (max)<span class="hint">Used to suggest how many to order.</span><input type="number" step="any" min="0" name="max_qty" value="${esc(it?.max_qty)}"></label></div>
       <label class="f">OEM / supplier<input type="text" name="supplier" value="${esc(it?.supplier)}"></label>
-      <label class="f">Service if idle on the shelf<span class="hint">Nest reminds the line admin when the tool hasn’t been used or serviced for this long.</span><select name="svc">${SVC_OPTS(it?.service_idle_months)}</select></label>
+      ${svcFields(it?.service_idle_months, it?.service_unit, 'item')}
       ${isNew ? `<div class="row2"><label class="f">Opening quantity<input type="number" step="any" min="0" name="qty" value="0"></label>
         <label class="f">At location<select name="location_id">${locOptions(realLocs()[0]?.id)}</select></label></div>` : ''}
       <label class="f">Notes<textarea name="notes">${esc(it?.notes)}</textarea></label>
       <label class="check"><input type="checkbox" name="is_kit" ${it?.is_kit ? 'checked' : ''}> This is a redress kit (track kit numbers, components and expiry dates)</label>
       ${isNew ? '' : `<label class="check"><input type="checkbox" name="active" ${it.active ? 'checked' : ''}> Active (untick to archive: it disappears from lists but keeps its history)</label>`}`,
-    onOpen: d => wirePlaceFields(d, it),
+    onOpen: d => { wirePlaceFields(d, it); wireSvc(d); },
     onSubmit: async data => {
       if (!data.name.trim()) throw new Error('Enter a description.');
+      const rule = svcRead(data);
       if (!data.sub_line_id) throw new Error('Choose the service line and sub service line.');
       if (!data.kind) throw new Error('Choose the type.');
       const p = { code: data.code, name: data.name, sub_line_id: +data.sub_line_id, kind: data.kind, subtype_id: data.subtype_id ? +data.subtype_id : null,
         unit: data.unit, min_qty: data.min_qty, max_qty: data.max_qty, supplier: data.supplier, notes: data.notes, is_kit: !!data.is_kit,
-        service_idle_months: data.svc ? +data.svc : null };
+        service_idle_months: rule ? rule.every : null, service_unit: rule ? rule.unit : 'month' };
+      if (rule?.last) p.service_last = rule.last;
       if (isNew) {
         if (data.department_id) p.department_id = +data.department_id;
         if (num(data.qty) > 0) p.stock = [{ location_id: +data.location_id, qty: num(data.qty) }];
@@ -506,7 +542,7 @@ function editItem(it) {
         toast('Item added'); invalidate(); go('#/item/' + id); return;
       }
       p.id = it.id; p.active = !!data.active;
-      if (!('service_idle_months' in it)) delete p.service_idle_months;
+      if (!('service_idle_months' in it)) { delete p.service_idle_months; delete p.service_unit; }
       await q(sb.rpc('item_save', { p }));
       const moved = svcById(p.sub_line_id)?.department_id; toast(moved && moved !== it.department_id ? `Saved. ${lineName(moved)} now looks after this item.` : 'Changes saved'); invalidate(); refresh();
     }
@@ -515,12 +551,14 @@ function editItem(it) {
 function bulkEdit(ids) {
   return modal({
     title: `Edit ${plural(ids.length, 'item')}`, sub: 'Only the fields you fill in will change.', submit: 'Apply to all',
+    onOpen: wireSvc,
     body: `<p class="muted">To change the service line, type or sub-type, use <b>Move to…</b>.</p>
       <div class="row2"><label class="f">Reorder at (min)<input type="number" step="any" min="0" name="min_qty"></label>
       <label class="f">Restock up to (max)<input type="number" step="any" min="0" name="max_qty"></label></div>
       <div class="row2"><label class="f">Unit<input type="text" name="unit"></label><label class="f">OEM / supplier<input type="text" name="supplier"></label></div>
       <div class="row2"><label class="f">Redress kit<select name="is_kit"><option value="">No change</option><option value="yes">Yes, these are redress kits</option><option value="no">No</option></select></label>
-      <label class="f">Service if idle on the shelf<select name="svc"><option value="">No change</option>${SVC_OPTS(undefined, true)}</select></label></div>
+      </div>
+      ${svcFields(undefined, 'month', 'bulk')}
       <label class="check"><input type="checkbox" name="clear_min"> Remove reorder levels from these items</label>`,
     onSubmit: async d => {
       const u = {};
@@ -529,9 +567,11 @@ function bulkEdit(ids) {
       if (d.clear_min) { u.min_qty = null; u.max_qty = null; }
       if (d.unit) u.unit = d.unit; if (d.supplier) u.supplier = d.supplier;
       if (d.is_kit) u.is_kit = d.is_kit === 'yes';
-      if (d.svc) u.service_idle_months = d.svc === 'none' ? null : +d.svc;
-      if (!Object.keys(u).length) throw new Error('Fill in at least one field.');
-      for (let i = 0; i < ids.length; i += 200) await q(sb.from('items').update(u).in('id', ids.slice(i, i + 200)));
+      const rule = svcRead(d);
+      if (!Object.keys(u).length && rule === undefined) throw new Error('Fill in at least one field.');
+      if (Object.keys(u).length) for (let i = 0; i < ids.length; i += 200) await q(sb.from('items').update(u).in('id', ids.slice(i, i + 200)));
+      if (rule !== undefined) for (let i = 0; i < ids.length; i += 200)
+        await q(sb.rpc('set_service_rule', { p_items: ids.slice(i, i + 200), p_every: rule ? rule.every : null, p_unit: rule ? rule.unit : 'month', p_last: rule?.last || null }));
       toast(`Updated ${plural(ids.length, 'item')}`); S.inv.sel.clear(); refresh();
     }
   });
@@ -557,7 +597,7 @@ ROUTES.item = {
       isAdmin() ? q(sb.from('audit_log').select('at,user_name,action,old_data,new_data').eq('table_name', 'items').eq('record_id', String(id)).eq('action', 'update').order('at', { ascending: false }).limit(20)).catch(() => []) : Promise.resolve([]),
     ]);
     if (!it) return topbar('Item not found', 'It may have been removed.') + '<a class="btn" href="#/inventory">Back to inventory</a>';
-    it.service_idle_months = svc?.service_idle_months ?? null;
+    it.service_idle_months = svc?.service_idle_months ?? null; it.service_unit = svc?.service_unit || 'month';
     this.ctx = { it, stock, cos, units, certs, comps, price, order, svc };
     const t = localISO(0); const act = canAct(it.department_id); const adm = canAdmin(it.department_id);
     const canIssue = it.item_type !== 'equipment';
@@ -937,7 +977,7 @@ function itemServicePanel(it, svc, log, lastUse, adm) {
     ${adm && !ro ? `<div class="actionrow mt"><button class="btn small" data-x2="rule">Set a rule</button></div>` : ''}</div></section>`;
   const due = svc?.service_due_on; const soon = due && due <= localISO(30);
   return `<section class="panel"><header><h2>Servicing</h2>${svc?.out_now ? chip('out', 'Out on a job') : due && due <= t ? chip('overdue', 'Service due') : soon ? chip('soon', 'Due soon') : chip('ok', 'Up to date')}</header><div class="body">
-    <dl class="kv"><dt>Rule</dt><dd>Service if idle ${it.service_idle_months} months</dd>
+    <dl class="kv"><dt>Rule</dt><dd>Service if idle ${svcRuleText(it.service_idle_months, it.service_unit)}</dd>
       <dt>Last used</dt><dd>${svc?.last_used_at ? fd(svc.last_used_at) : '<span class="sub">Never issued in Nest</span>'}</dd>
       <dt>Last serviced</dt><dd>${svc?.last_serviced_at ? `${fd(svc.last_serviced_at)}${svc.last_serviced_by_name ? ' · ' + esc(svc.last_serviced_by_name) : ''}` : '<span class="sub">Not recorded</span>'}</dd>
       <dt>Next service</dt><dd>${due ? `<b class="${due <= t ? 'neg' : ''}">${fd(due)}</b>${svc?.out_now ? '<span class="sub"> · paused while out on a job</span>' : ''}` : '—'}</dd></dl>
@@ -962,12 +1002,16 @@ function bindItemExtras(main, c) {
         <label class="f">Note<span class="hint">Optional, for example the PO number or supplier.</span><input type="text" name="note" value="${esc(c.order?.note || '')}"></label>`,
       onSubmit: async x => { await q(sb.rpc('set_item_order', { p_item: it.id, p_qty: +x.qty, p_expected: x.exp || null, p_note: x.note || '' })); toast('Marked on order'); refresh(); } }),
     unorder: async () => { try { await q(sb.rpc('clear_item_order', { p_item: it.id })); toast('No longer on order'); refresh(); } catch (e) { toast(niceError(e), true); } },
-    serviced: () => modal({ title: `Mark serviced · ${it.code || it.name}`, submit: 'Mark serviced', sub: 'Restarts the idle clock from today and records it in the service history.',
-      body: '<label class="f">Note<span class="hint">Optional, for example who did it or what was done.</span><textarea name="note" rows="2"></textarea></label>',
-      onSubmit: async x => { await q(sb.rpc('mark_serviced', { p_item: it.id, p_note: x.note || '' })); toast('Marked serviced'); refresh(); } }),
+    serviced: () => modal({ title: `Mark serviced · ${it.code || it.name}`, submit: 'Mark serviced', sub: 'Records the service in the history and restarts the idle clock from the date you pick.',
+      body: `<label class="f">Serviced on<span class="hint">Today, or an earlier date if it was serviced before you recorded it.</span><input type="date" name="on" value="${localISO(0)}" max="${localISO(0)}" required></label>
+        <label class="f">Note<span class="hint">Optional, for example who did it or what was done.</span><textarea name="note" rows="2"></textarea></label>`,
+      onSubmit: async x => {
+        if (!x.on) throw new Error('Choose the date it was serviced.');
+        if (x.on > localISO(0)) throw new Error('The service date can’t be in the future.');
+        await q(sb.rpc('mark_serviced', { p_item: it.id, p_note: x.note || '', p_on: x.on })); toast(x.on === localISO(0) ? 'Marked serviced' : `Marked serviced on ${fd(x.on)}`); refresh(); } }),
     rule: () => modal({ title: `Idle-service rule · ${it.code || it.name}`, submit: 'Save rule',
-      body: `<label class="f">Service if idle on the shelf<span class="hint">The clock starts from the last time it was issued on a job, serviced, or added to Nest.</span><select name="svc">${SVC_OPTS(it.service_idle_months)}</select></label>`,
-      onSubmit: async x => { await q(sb.rpc('set_service_rule', { p_items: [it.id], p_months: x.svc ? +x.svc : null })); toast(x.svc ? 'Rule saved' : 'Rule removed'); refresh(); } }),
+      body: svcFields(it.service_idle_months, it.service_unit, 'rule'), onOpen: wireSvc,
+      onSubmit: async x => { const r = svcRead(x); await q(sb.rpc('set_service_rule', { p_items: [it.id], p_every: r ? r.every : null, p_unit: r ? r.unit : 'month', p_last: r?.last || null })); toast(r ? 'Rule saved' : 'Rule removed'); refresh(); } }),
   };
   $$('[data-x2]', main).forEach(b => b.onclick = () => A[b.dataset.x2]());
 }

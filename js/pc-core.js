@@ -210,6 +210,39 @@ function pcCsv(file, cols, rows) {
   const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob(['﻿' + txt], { type: 'text/csv' })); a.download = file; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 2000);
 }
 
+// 3.0.5u: an Excel file with a header row, and an optional second sheet of notes (uploads read the first sheet)
+async function pcXlsx(file, cols, rows, o = {}) {
+  await loadScript('vendor/exceljs.min.js'); const wb = new ExcelJS.Workbook(); wb.creator = 'GANKCO Nest'; wb.created = new Date();
+  const ws = wb.addWorksheet(o.sheet || 'Sheet1', { views: [{ state: 'frozen', ySplit: 1 }] });
+  ws.columns = cols.map(c => ({ header: c.l, key: c.k, width: c.w || Math.max(12, String(c.l).length + 3) }));
+  rows.forEach(r => ws.addRow(Object.fromEntries(cols.map(c => [c.k, c.v ? c.v(r) : r[c.k] ?? '']))));
+  const h = ws.getRow(1); h.font = { bold: true }; h.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFEDEEF0' } }; h.border = { bottom: { style: 'thin', color: { argb: 'FFBFC1C5' } } };
+  if (o.notes) { const n = wb.addWorksheet('How to fill it in'); n.columns = [{ header: 'Column', key: 'a', width: 24 }, { header: 'What to put', key: 'b', width: 100 }];
+    o.notes.forEach(([a, b]) => n.addRow({ a, b })); n.getRow(1).font = { bold: true }; n.getColumn('a').font = { bold: true }; n.getColumn('b').alignment = { wrapText: true, vertical: 'top' }; }
+  const buf = await wb.xlsx.writeBuffer();
+  saveBlob(new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }), file);
+}
+// 3.0.5u: the shared upload dialog: template button, notes, file, then a summary with any skipped rows
+function pcUploadDlg({ title, sub, notes = [], template, run, done, submit = 'Upload' }) {
+  return modal({ title, sub, submit, wide: true,
+    body: `<ol class="pc-up-steps"><li>Download the template and fill it in. <button class="btn small" type="button" data-tpl>${ico('down')}Template</button></li>
+        ${notes.map(([k, v]) => `<li><b>${esc(k)}</b>: ${esc(v)}</li>`).join('')}</ol>
+      <label class="f wide">File (.xlsx or .csv)<input type="file" name="file" accept=".xlsx,.csv" required></label><div data-prev></div>`,
+    onOpen: d => {
+      $('[data-tpl]', d).onclick = () => pcTry(template);
+      $('[name=file]', d).onchange = async e => { const f = e.target.files[0]; if (!f) return;
+        try { d._rows = await pfReadSheet(f); $('[data-prev]', d).innerHTML = `<div class="notice ok">${plural(d._rows.length, 'row')} ready to upload.</div>`; }
+        catch (x) { $('[data-prev]', d).innerHTML = `<div class="notice warn">${esc(x.message)}</div>`; d._rows = null; } };
+    },
+    onSubmit: async (_, d) => {
+      if (!d._rows?.length) throw new Error('Choose a file with at least one row');
+      const r = await run(d._rows); toast(done(r));
+      if (r.skipped?.length) setTimeout(() => modal({ title: `${plural(r.skipped.length, 'row')} need a look`, sub: 'Everything else was saved. Fix these rows and upload just them again.', submit: null, cancel: 'Close',
+        body: `<ul class="list pc-skip">${r.skipped.map(x => `<li><div class="main"><div class="name">Row ${x.row + 1}</div><div class="sub">${esc(x.why)}</div></div></li>`).join('')}</ul>` }), 300);
+      pcRefresh();
+    } });
+}
+
 /* pcTable: a searchable, filterable, exportable table.
    cols: [{ k, l, f(row) → html, v(row) → text for sort/search/csv, cls, sort: false }]
    o: { search(row) → text, filters: [{ k, l, opts: [[v, label]], test(row, v) }], empty, href(row), onRow(row), csv: 'file name', per: 50, actions: html, sortBy, check } */
@@ -297,15 +330,25 @@ function pcRead(root, fields) {
   return out;
 }
 // a form in a modal that calls one function
-async function pcEdit({ title, sub, fields, vals = {}, save, submit = 'Save', wide, danger, onOpen }) {
+async function pcEdit({ title, sub, fields, vals = {}, save, submit = 'Save', wide, danger, onOpen, del }) {
   return modal({ title, sub, wide: wide ?? fields.length > 6, submit, danger, body: pcForm(fields, vals),
-    onOpen: (d, close) => { pcLiveShow(d, fields, vals); onOpen && onOpen(d, close); },
+    onOpen: (d, close) => { pcLiveShow(d, fields, vals); if (del) pcDelBtn(d, close, del); onOpen && onOpen(d, close); },
     onSubmit: async (_, d) => {
       const v = pcRead(d, fields);
       const miss = fields.find(f => f.req && (v[f.k] == null || v[f.k] === '' || (Array.isArray(v[f.k]) && !v[f.k].length)) && (!f.show || f.show(v)));
       if (miss) throw new Error(`${miss.l} is required`);
       return save(v, d);
     } });
+}
+// 3.0.5u: a Delete button on the left of an edit dialog. del: { label, title, text, yes, ok, run, after }
+function pcDelBtn(d, close, del) {
+  const b = document.createElement('button'); b.type = 'button'; b.className = 'btn danger-ghost pc-del'; b.innerHTML = ico('trash') + esc(del.label || 'Delete');
+  $('.mf', d).prepend(b);
+  b.onclick = async () => {
+    close(null);
+    if (!await pcConfirm(del.title || 'Delete?', del.text || 'This can’t be undone.', del.yes || 'Delete')) return;
+    try { await del.run(); toast(del.ok || 'Deleted'); del.after ? del.after() : render({ quiet: true }); } catch (e) { toast(niceError(e), true); }
+  };
 }
 // fields with show(vals) appear and disappear as the form changes
 function pcLiveShow(root, fields, vals, box) {

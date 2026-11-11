@@ -1,4 +1,4 @@
-# GANKCO Nest: version 3.0.5 update (PeopleCore: Performance, Onboarding & Confirmation, Promotions & Salary Reviews, Competency, Surveys)
+# GANKCO Nest: version 3.0.5 with its update (PeopleCore: Performance, Onboarding & Confirmation, Promotions & Salary Reviews, Competency, Surveys)
 
 *Built to support engineered solutions.*
 
@@ -9,9 +9,31 @@
 - **Emails:** sent by Brevo from **nest-alerts@gankcoenergy.com** as "GANKCO Nest". Sign-in emails use Supabase's custom SMTP (templates in Supabase → Authentication → Emails → Templates). Alert emails use the Brevo API key saved in Supabase Vault as `brevo_api_key`, on a schedule (pg_cron).
 - **DNS (company IT):** `nest` CNAME → `gankco-energy.github.io`, plus the Brevo verification records.
 
-## Install 3.0.5 (about 5 minutes)
+## Install the 3.0.5 update (about 3 minutes)
 
-1. **Supabase → SQL Editor:** the upgrade comes in **3 parts**. For each of **`21-nest-v3.0.5-upgrade-part1.sql`**, **`part2.sql`** and **`part3.sql`**, in order: open a **New query**, paste the whole file, press **Run**. Parts 1 and 2 end with *Part N of 3 done*; part 3 ends with **Nest 3.0.5 installed**. Each part is all-or-nothing and safe to run again; part 3 can be run again on its own.
+3.0.5 is already installed, so this update needs **one SQL file**:
+
+1. **Supabase → SQL Editor:** open a **New query**, paste the whole of **`21-nest-v3.0.5-upgrade-part4.sql`**, press **Run**. It ends with **Nest 3.0.5 installed**. It is all-or-nothing and safe to run again.
+2. **GitHub:** unzip **`gankco-nest-v3.0.5.zip`** and upload everything into **github.com/gankco-energy/gankco-nest**, then commit. Keep the `CNAME` file.
+3. Reload Nest (**Ctrl + Shift + R**). Open tabs also show a **Reload** bar. The footer still says **v3.0.5**.
+4. **Your Gmail as Developer, your work email as staff:**
+   1. *Developer tools → Sign-ups → Allowed outside emails:* add your Gmail. The company-email rule stays on for everyone else.
+   2. Sign up with the Gmail (in a private window), then approve it in *Nest admin → Team & access* and give it **Staff**.
+   3. Signed in as your work email: *Nest admin → Team & access → Transfer Developer* to the Gmail account. Your work email becomes ordinary staff with the apps and roles you choose.
+   4. Optional: remove the Gmail from the allowed list afterwards (its account stays).
+5. **Past records** (optional, each has a template with notes): *Performance → Appraisals & reviews → Upload past results*; *Onboarding & confirmation → Confirmations → Upload past records*; *Promotions → History → Upload past records*; *Competency → Assessments → Upload past levels*. Past objectives go in through the completed cycle's *Objectives → Upload past objectives*.
+
+### What's new in the 3.0.5 update
+- **Inventory servicing:** *Mark serviced* asks for the date it was serviced (today, or earlier). Rules can be 6, 12, 18 or 24 months, or **Custom**: any number of days, weeks or months. When you set a rule (item editor, Change rule, or Edit for several items) you can enter **Last serviced on**, so the clock starts from the real date. The clock runs from the later of last used and last serviced; the date it was added only counts when neither is known.
+- **Deletes and edits:** survey categories (rename, delete: their questions stay), survey questions (if nobody has answered), competency categories (if no competency uses them), competencies (if nobody has been assessed; otherwise deactivate), onboarding checklists (people onboarding keep their tasks), tasks in one person's onboarding (edit title, who does it, due date, note; remove), exceptional achievements (the person who added one while it waits; HR any), and **Withdraw** for a confirmation recommendation that is still waiting.
+- **Competency:** **Upload** many competencies from Excel (with their levels and the job roles that need them), **Export** the library, and **Add several job roles** at once in the editor.
+- **Company → Org chart** keeps the Directory / Org chart / Announcements / Policies / Holidays tabs.
+- **Developer tools → Performance & talent:** send an appraisal back to any step or delete it; put objectives back to draft or delete them; delete a period or a cycle with everything in it; reverse an approved confirmation or an applied promotion or salary review; delete a PIP, a competency assessment, an onboarding, or one person's answers to a named survey. Each asks for the person's (or cycle's) name and is kept in the audit trail as a **developer reverse**.
+- **Past records:** results, confirmations, promotions and salary reviews, and competency levels from before Nest, marked **Past record**.
+
+## Install 3.0.5 (already done, for reference)
+
+1. **Supabase → SQL Editor:** the upgrade comes in **4 parts** (part 4 is the update above). For each of **`21-nest-v3.0.5-upgrade-part1.sql`** to **`part4.sql`**, in order: open a **New query**, paste the whole file, press **Run**. Parts 1 and 2 end with *Part N of 4 done*; parts 3 and 4 end with **Nest 3.0.5 installed**. Each part is all-or-nothing and safe to run again.
 2. **GitHub:** unzip **`gankco-nest-v3.0.5.zip`** and upload everything into **github.com/gankco-energy/gankco-nest**, then commit. Keep the `CNAME` file.
 3. Reload Nest (**Ctrl + Shift + R**). The bottom of each page shows **v3.0.5**.
 4. **Who can do what:** the new modules' permissions are SeamlessHR's own. **HR Admin** got all of them; **HR Officer** got all except deleting and settings. Pay amounts in promotions and salary reviews are only seen with **View salary amounts** (HR Admin has it). Change roles in **PeopleCore → System control → Roles & permissions**.

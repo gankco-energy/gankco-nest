@@ -166,7 +166,7 @@ function loadScript(src) {
   if (SCRIPT_LOADS[src]) return SCRIPT_LOADS[src];
   const p = new Promise((res, rej) => {
     const old = $(`script[data-src="${src}"]`); if (old) old.remove();
-    const s = document.createElement('script'); s.src = src + '?v=' + encodeURIComponent(CFG.VERSION || ''); s.dataset.src = src; s.async = false;
+    const s = document.createElement('script'); s.src = src + '?v=' + encodeURIComponent(CFG.BUILD || CFG.VERSION || ''); s.dataset.src = src; s.async = false;
     const keep = {}; const names = ['define', 'module', 'exports'];
     const hide = () => names.forEach(n => { if (n in window) { keep[n] = window[n]; try { window[n] = undefined; } catch (e) { } } });
     const restore = () => names.forEach(n => { if (n in keep) { try { window[n] = keep[n]; } catch (e) { } } });
@@ -403,7 +403,7 @@ async function checkVersion() {
   try {
     const r = await fetch('version.json?t=' + Date.now(), { cache: 'no-store' }); if (!r.ok) return;
     const v = await r.json();
-    if (v.version && v.version !== CFG.VERSION && !$('#newver')) {
+    if (v.version && (v.build || v.version) !== (CFG.BUILD || CFG.VERSION) && !$('#newver')) {
       const b = document.createElement('div'); b.id = 'newver'; b.className = 'newver';
       b.innerHTML = `A new version of ${esc(CFG.APP_NAME)} is available. <button class="btn small tagbtn">Reload</button>`;
       $('button', b).onclick = () => location.reload(); document.body.appendChild(b);

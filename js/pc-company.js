@@ -152,10 +152,10 @@ function pcOrgTree(rootSel) {
   const roots = rootSel ? ppl.filter(c => c.id === +rootSel) : (by[0] || []);
   return `<div class="pc-org"><ul>${roots.map(r => node(r, 0)).join('')}</ul></div>`;
 }
-const pcOrgPage = (title, sub) => ({
+const pcOrgPage = (title, sub, tabs) => ({
   async load(rest, params) {
     const root = params.get?.('from') || '';
-    return topbar(title, sub, `<button class="btn" id="ocall">Expand all</button><button class="btn" onclick="window.print()">${ico('print')}Print</button>`) +
+    return topbar(title, sub, `<button class="btn" id="ocall">Expand all</button><button class="btn" onclick="window.print()">${ico('print')}Print</button>`) + (tabs ? hrCompanyTabs(tabs) : '') +
       `<div class="filters"><select id="ocroot" style="width:auto">${pcPeopleOpts(root, 'Whole company')}</select></div><section class="panel pc-orgwrap">${pcOrgTree(root)}</section>`;
   },
   bind(main, rest, params, parts) {
@@ -165,7 +165,7 @@ const pcOrgPage = (title, sub) => ({
   }
 });
 COMP.pages.organogram = { perms: ['view-organogram', 'view-organisational-settings'], ...pcOrgPage('Organogram', 'Everyone by who they report to. Change a supervisor on the person’s record.') };
-PC_SELF.org = pcOrgPage('Organogram', 'Who reports to whom at GANKCO.');
+PC_SELF.org = pcOrgPage('Company', 'Org chart: who reports to whom at GANKCO.', 'org');
 
 // ---------------------------------------------------------------- HRIS · Employee settings (SeamlessHR's tabs)
 const PC_SET_TABS = [['id', 'Employee ID'], ['documents', 'Employee documents'], ['contracts', 'Contract types'], ['profile', 'Profile settings'], ['visibility', 'Profile sections'], ['notifications', 'Notifications'],

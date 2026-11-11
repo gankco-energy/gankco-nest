@@ -61,7 +61,8 @@ CP.pages[''] = { perms: ['view-competency-framework', 'view-competency-setup', '
     const [comps, cats, roles] = await Promise.all([q(sb.from('hr_competencies').select('*').order('name')), q(sb.from('hr_comp_categories').select('*').order('sort')), q(sb.from('hr_comp_roles').select('*'))]);
     Object.assign(this, { comps, cats, roles }); const off = params.off === '1';
     const list = comps.filter(c => off ? !c.active : c.active);
-    return topbar('Competency library', 'Every competency at GANKCO, its proficiency levels, and the job roles that need it.', pcCan('add-new-competency') ? `<button class="btn primary" data-cpe="new">${ico('plus')}Create competency</button>` : '') +
+    return topbar('Competency library', 'Every competency at GANKCO, its proficiency levels, and the job roles that need it.',
+        `<button class="btn" id="cpexp">${ico('down')}Export</button>` + (pcCan('add-new-competency') ? `<button class="btn" id="cpup">${ico('up')}Upload</button><button class="btn primary" data-cpe="new">${ico('plus')}Create competency</button>` : '')) +
       (pcCan('view-deactivated-competencies') ? `<nav class="pc-tabs"><a href="#/people/admin/comp" class="${off ? '' : 'on'}">Active</a><a href="#/people/admin/comp?off=1" class="${off ? 'on' : ''}">Deactivated</a></nav>` : '') +
       pcTable('cplib', [{ l: 'Competency', v: r => r.name, f: r => `<b>${esc(r.name)}</b><br><small class="muted">${esc(r.description || '')}</small>` },
         { l: 'Category', v: r => cats.find(c => c.id === r.category_id)?.name || '', f: r => esc(cats.find(c => c.id === r.category_id)?.name || '—') },
@@ -71,6 +72,8 @@ CP.pages[''] = { perms: ['view-competency-framework', 'view-competency-setup', '
         { noun: 'competency', csv: 'Competencies', empty: off ? 'No deactivated competencies.' : 'No competencies yet.', filters: [{ k: 'c', l: 'Category', opts: cats.map(c => [c.id, c.name]), test: (r, v) => r.category_id === +v }] });
   },
   bind(main) {
+    $('#cpexp', main).onclick = () => pcTry(() => cpExport(this.comps, this.cats, this.roles));
+    const up = $('#cpup', main); if (up) up.onclick = () => cpUpload();
     main.addEventListener('click', e => { const b = e.target.closest('[data-cpe]'); if (!b) return; const c = b.dataset.cpe === 'new' ? { levels: [{ title: 'Basic' }, { title: 'Intermediate' }, { title: 'Advance' }], active: true } : this.comps.find(x => x.id === +b.dataset.cpe);
       const rs = c.id ? this.roles.filter(x => x.competency_id === c.id) : [];
       const lvRow = (l, i) => `<div class="cp-lvrow"><span class="cp-rk">${i + 1}</span><input data-l="title" placeholder="Level title" value="${esc(l.title || '')}"><input data-l="description" placeholder="What it looks like" value="${esc(l.description || '')}"></div>`;
@@ -79,34 +82,82 @@ CP.pages[''] = { perms: ['view-competency-framework', 'view-competency-setup', '
       pcEdit({ title: c.id ? 'Edit competency' : 'Create competency', wide: true,
         fields: [{ k: 'name', l: 'Title', req: true }, { k: 'category_id', l: 'Category', t: 'select', opts: this.cats.filter(x => x.active || x.id === c.category_id).map(x => [x.id, x.name]) }, { k: 'description', l: 'Description', t: 'textarea', rows: 2 },
           { k: 'lv', l: 'Proficiency levels (lowest first)', t: 'html', html: `<div class="cp-lvs">${c.levels.map(lvRow).join('')}</div><button type="button" class="btn small" data-lvadd>${ico('plus')}Add a level</button> <button type="button" class="btn small" data-lvrem>Remove the last level</button>` },
-          { k: 'rl', l: 'Job roles that need it (required level, severity, time to acquire)', t: 'html', html: `<div class="cp-rrows">${rs.map(roleRow).join('')}</div><button type="button" class="btn small" data-radd>${ico('plus')}Add a job role</button>` },
+          { k: 'rl', l: 'Job roles that need it (required level, severity, time to acquire)', t: 'html', html: `<div class="cp-rrows">${rs.map(roleRow).join('')}</div><button type="button" class="btn small" data-radd>${ico('plus')}Add a job role</button> <button type="button" class="btn small" data-rmany>${ico('plus')}Add several job roles</button>
+            <div class="cp-many" hidden><input type="search" data-mf placeholder="Filter job roles"><div class="cp-many-list">${(S.pc.look?.jobs || []).filter(j => j.active).map(j => `<label class="check"><input type="checkbox" data-mj="${j.id}"> ${esc(j.name)}${j.unit_id && hrUnit(j.unit_id) ? ` <small class="muted">${esc(hrUnit(j.unit_id).name)}</small>` : ''}</label>`).join('')}</div>
+              <div class="cp-rrow cp-many-set"><select data-m="required_level">${c.levels.map((l, i) => opt(i + 1, `Needs ${i + 1} · ${l.title || ''}`, 1)).join('')}</select><select data-m="severity">${Object.entries(CP_SEV).map(([k, v]) => opt(k, v[1], 'medium')).join('')}</select><span class="pc-money"><input type="number" min="0" data-m="acquire_months" placeholder="—"><i>months</i></span><button type="button" class="btn small primary" data-mok>Add ticked roles</button></div></div>` },
           ...(c.id ? [{ k: 'active', l: 'Active', t: 'switch' }] : [])], vals: c,
-        onOpen: d => d.addEventListener('click', e => {
+        onOpen: d => { d.addEventListener('input', cpManyFilter); d.addEventListener('click', e => {
           if (e.target.closest('[data-lvadd]')) { const n = $$('.cp-lvrow', d).length; if (n >= 6) return toast('Six levels at most', true); $('.cp-lvs', d).insertAdjacentHTML('beforeend', lvRow({}, n)); }
           if (e.target.closest('[data-lvrem]')) { const r = $$('.cp-lvrow', d); if (r.length <= 2) return toast('Two levels at least', true); r.at(-1).remove(); }
           if (e.target.closest('[data-radd]')) $('.cp-rrows', d).insertAdjacentHTML('beforeend', roleRow({}));
-          const x = e.target.closest('[data-rdel]'); if (x) x.closest('.cp-rrow').remove(); }),
+          const x = e.target.closest('[data-rdel]'); if (x) x.closest('.cp-rrow').remove();
+          if (e.target.closest('[data-rmany]')) { const m = $('.cp-many', d); m.hidden = !m.hidden; if (!m.hidden) $('[data-mf]', d).focus(); }
+          if (e.target.closest('[data-mok]')) {
+            const have = new Set($$('.cp-rrows [data-r=job_role_id]', d).map(s => +s.value).filter(Boolean));
+            const pick = $$('[data-mj]:checked', d).map(i => +i.dataset.mj); if (!pick.length) return toast('Tick at least one job role', true);
+            const lv = +$('[data-m=required_level]', d).value, sev = $('[data-m=severity]', d).value, mo = $('[data-m=acquire_months]', d).value;
+            let n = 0; pick.forEach(id => { if (have.has(id)) { const row = $$('.cp-rrows .cp-rrow', d).find(r => +$('[data-r=job_role_id]', r).value === id); $('[data-r=required_level]', row).value = lv; $('[data-r=severity]', row).value = sev; $('[data-r=acquire_months]', row).value = mo; }
+              else $('.cp-rrows', d).insertAdjacentHTML('beforeend', roleRow({ job_role_id: id, required_level: lv, severity: sev, acquire_months: mo || null })); n++; });
+            $$('[data-mj]:checked', d).forEach(i => { i.checked = false; }); $('.cp-many', d).hidden = true; toast(`${plural(n, 'job role')} added. Save to keep them.`); }
+        }); },
         save: async (v, d) => { const levels = $$('.cp-lvrow', d).map(r => ({ title: $('[data-l=title]', r).value.trim(), description: $('[data-l=description]', r).value.trim() }));
-          const roles = $$('.cp-rrow', d).map(r => ({ job_role_id: +$('[data-r=job_role_id]', r).value || null, required_level: +$('[data-r=required_level]', r).value, severity: $('[data-r=severity]', r).value, acquire_months: $('[data-r=acquire_months]', r).value || null })).filter(r => r.job_role_id);
-          await q(sb.rpc('hr_comp_save', { p: { ...v, id: c.id || null, levels, roles } })); toast('Saved'); render({ quiet: true }); } }); });
+          const roles = $$('.cp-rrows .cp-rrow', d).map(r => ({ job_role_id: +$('[data-r=job_role_id]', r).value || null, required_level: +$('[data-r=required_level]', r).value, severity: $('[data-r=severity]', r).value, acquire_months: $('[data-r=acquire_months]', r).value || null })).filter(r => r.job_role_id);
+          await q(sb.rpc('hr_comp_save', { p: { ...v, id: c.id || null, levels, roles } })); toast('Saved'); render({ quiet: true }); },
+        del: c.id && pcCan('add-new-competency', 'edit-competency') ? { label: 'Delete', title: 'Delete this competency?', yes: 'Delete competency', ok: 'Competency deleted',
+          text: `“${esc(c.name)}” and its job roles are removed. If anyone has been assessed on it, it can’t be deleted: switch off Active to deactivate it instead.`,
+          run: () => q(sb.rpc('hr_comp_delete', { p_id: c.id })) } : null }); });
   }
 };
+function cpManyFilter(e) { if (!e.target.matches('[data-mf]')) return; const t = e.target.value.trim().toLowerCase(); $$('.cp-many-list label', e.currentTarget).forEach(l => { l.hidden = !!t && !l.textContent.toLowerCase().includes(t); }); }
+// 3.0.5u: one row per competency and job role. The same layout is used to export and to upload.
+const CP_XCOLS = [{ k: 'title', l: 'title', w: 34 }, { k: 'category', l: 'category', w: 18 }, { k: 'description', l: 'description', w: 40 },
+  ...[1, 2, 3, 4, 5, 6].map(i => ({ k: 'level_' + i, l: 'level_' + i, w: 16 })), { k: 'job_role', l: 'job_role', w: 30 }, { k: 'required_level', l: 'required_level', w: 15 }, { k: 'severity', l: 'severity', w: 11 }, { k: 'months', l: 'months', w: 9 }];
+const CP_XNOTES = [['title', 'The competency. A title already in Nest is updated; a new one is added.'], ['category', 'Optional. A new category name is added.'], ['description', 'Optional.'],
+  ['level_1 … level_6', 'The proficiency level titles, lowest first. At least two for a new competency.'], ['job_role', 'Optional. The job role that needs it, exactly as in PeopleCore. Use one row per job role and repeat the title.'],
+  ['required_level', 'The level the job role needs: 1 is the lowest.'], ['severity', 'low, medium, high or critical.'], ['months', 'Optional. Months a new person has to reach the level.']];
+async function cpExport(comps, cats, roles) {
+  const jn = id => (S.pc.look?.jobs || []).find(j => j.id === id)?.name || '';
+  const rows = comps.flatMap(c => { const base = { title: c.name, category: cats.find(x => x.id === c.category_id)?.name || '', description: c.description || '', ...Object.fromEntries(c.levels.map((l, i) => ['level_' + (i + 1), l.title])) };
+    const rs = roles.filter(r => r.competency_id === c.id); return rs.length ? rs.map(r => ({ ...base, job_role: jn(r.job_role_id), required_level: r.required_level, severity: r.severity, months: r.acquire_months ?? '' })) : [base]; });
+  await pcXlsx(`GANKCO competencies ${localISO(0)}.xlsx`, CP_XCOLS, rows, { sheet: 'Competencies', notes: CP_XNOTES });
+}
+// 3.0.5u: past graded levels, from before Nest: one completed assessment per person and date
+const CP_PAST_COLS = [{ k: 'who', l: 'who', w: 26 }, { k: 'competency', l: 'competency', w: 32 }, { k: 'level', l: 'level', w: 14 }, { k: 'assessed_on', l: 'assessed_on', w: 13 }, { k: 'comment', l: 'comment', w: 40 }];
+const CP_PAST_NOTES = [['who', 'Staff ID, work email or full name.'], ['competency', 'The competency title, exactly as in the library.'], ['level', 'The level they were graded at: a number (1 is the lowest) or the level title.'],
+  ['assessed_on', 'Optional. The date of the assessment. Rows for the same person and date become one assessment.'], ['comment', 'Optional.']];
+function cpPastUpload() {
+  return pcUploadDlg({ title: 'Upload past competency levels', sub: 'Levels people were graded at before Nest. Each person and date becomes a completed assessment, used in gap analysis until a newer one is done.', notes: CP_PAST_NOTES,
+    template: () => pcXlsx('Past competency levels template.xlsx', CP_PAST_COLS, [{ who: 'GES0042026', competency: 'Slickline operations', level: 2, assessed_on: '2025-12-15', comment: '' }], { sheet: 'Levels', notes: CP_PAST_NOTES }),
+    run: rows => q(sb.rpc('hr_comp_historic_upload', { p_rows: rows })), done: r => `${plural(r.added, 'level')} saved in ${plural(r.assessments, 'new assessment')}` });
+}
+function cpUpload() {
+  return pcUploadDlg({ title: 'Upload competencies', sub: 'Add or update many competencies at once, and attach them to the job roles that need them.', notes: CP_XNOTES.slice(0, 5),
+    template: () => pcXlsx('Competency upload template.xlsx', CP_XCOLS, [
+      { title: 'Slickline operations', category: 'Technical', description: 'Rig up, run and recover slickline tools safely', level_1: 'Basic', level_2: 'Intermediate', level_3: 'Advanced', job_role: 'Slickline Operator', required_level: 2, severity: 'high', months: 6 },
+      { title: 'Slickline operations', job_role: 'Slickline Supervisor', required_level: 3, severity: 'critical', months: 3 }], { sheet: 'Competencies', notes: CP_XNOTES }),
+    run: rows => q(sb.rpc('hr_comp_upload', { p_rows: rows })),
+    done: r => `${plural(r.added, 'competency', 'competencies')} added, ${plural(r.updated, 'competency', 'competencies')} updated, ${plural(r.roles, 'job role')} attached` });
+}
 CP.pages.categories = { perms: ['view-competency-category-setup'],
   async load() { const rows = this.rows = await q(sb.from('hr_comp_categories').select('*').order('sort'));
     return topbar('Competency categories', 'Group competencies, for example Technical, Core and Leadership.', `<button class="btn primary" data-cc="new">${ico('plus')}Add category</button>`) +
       pcTable('cpcat', [{ k: 'name', l: 'Title', f: r => `<b>${esc(r.name)}</b>${r.active ? '' : ' ' + pcChip('muted', 'Off')}` }, { l: 'Description', v: r => r.description || '', f: r => esc(r.description || '') }, { l: '', cls: 'num', sort: false, csv: false, f: r => `<button class="btn small" data-cc="${r.id}">Edit</button>` }], rows, { noun: 'category', search: false }); },
   bind(main) { main.addEventListener('click', e => { const b = e.target.closest('[data-cc]'); if (!b) return; const r = b.dataset.cc === 'new' ? { active: true } : this.rows.find(x => x.id === +b.dataset.cc);
     pcEdit({ title: r.id ? 'Edit category' : 'Add category', wide: false, fields: [{ k: 'name', l: 'Title', req: true }, { k: 'description', l: 'Description', t: 'textarea' }, { k: 'active', l: 'In use', t: 'switch' }], vals: r,
-      save: async v => { await q(sb.rpc('hr_comp_category_save', { p: { ...v, id: r.id || null } })); toast('Saved'); render({ quiet: true }); } }); }); }
+      save: async v => { await q(sb.rpc('hr_comp_category_save', { p: { ...v, id: r.id || null } })); toast('Saved'); render({ quiet: true }); },
+      del: r.id ? { label: 'Delete category', title: 'Delete this category?', yes: 'Delete category', ok: 'Category deleted',
+        text: `“${esc(r.name)}” is removed. A category that competencies still use can’t be deleted: move them first, or switch off “In use”.`,
+        run: () => q(sb.rpc('hr_comp_category_delete', { p_id: r.id })) } : null }); }); }
 };
 CP.pages.assessments = { perms: ['view-staff-competency-analysis', 'initiate-competency-assessment'],
   async load(rest) {
     if (rest[0]) { this.one = +rest[0]; const d = await q(sb.rpc('hr_comp_get', { p_id: +rest[0] })); return topbar('Competency assessment', esc(d.employee.name), '<a class="btn" href="#/people/admin/comp/assessments">Back</a>') + cpAssessHtml(d); }
     this.one = null; const rows = await q(sb.rpc('hr_comp_list', { p_scope: 'admin' }));
-    return topbar('Competency assessments', 'Staff rate themselves on the competencies their role needs, then their line manager grades them.', pcCan('initiate-competency-assessment') ? `<button class="btn primary" id="cpstart">${ico('plus')}Start assessments</button>` : '') +
+    return topbar('Competency assessments', 'Staff rate themselves on the competencies their role needs, then their line manager grades them.', pcCan('initiate-competency-assessment') ? `<button class="btn" id="cppast">${ico('up')}Upload past levels</button><button class="btn primary" id="cpstart">${ico('plus')}Start assessments</button>` : '') +
       cpList('cpall', rows, '#/people/admin/comp/assessments/', { admin: true, csv: 'Competency assessments' });
   },
   bind(main) { if (this.one) return cpBind(main, this.one);
+    const pp = $('#cppast', main); if (pp) pp.onclick = cpPastUpload;
     const b = $('#cpstart', main); if (b) b.onclick = () => pcEdit({ title: 'Start competency assessments', sub: 'Only people whose job role has competencies get one. Anyone with an open assessment is skipped.', wide: true, submit: 'Start',
       fields: [{ k: 'who', l: 'Who', t: 'radio', opts: [['all', 'Everyone'], ['some', 'Chosen people']], def: 'all' }, { k: 'emps', l: 'People', t: 'checks', opts: pcPeopleList(), show: v => v.who === 'some' }],
       save: async v => { const r = await q(sb.rpc('hr_comp_start', { p_emps: v.who === 'some' ? (v.emps || []) : null })); toast(`${plural(r.started, 'assessment')} started`); render({ quiet: true }); } }); }

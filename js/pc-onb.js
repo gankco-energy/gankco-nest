@@ -35,9 +35,17 @@ function onCard(o, ctx) {
         ${ctx === 'admin' ? `<select class="inline mini" data-onact="${o.id}" aria-label="Actions"><option value="">Actions…</option>${opt('add', 'Add a task', '')}${o.status === 'active' ? opt('complete', 'Mark as completed', '') + opt('cancel', 'Cancel', '') : opt('reopen', 'Reopen', '')}${pcCan('manage-onboarding-checklists') ? opt('delete', 'Delete', '') : ''}</select>` : ''}</span></header>
     <div class="on-groups">${groups.map(([k, ts]) => `<div class="on-grp"><h3>${esc(ctx === 'self' && k === 'employee' ? 'You' : ON_OWN[k])}</h3><ul class="on-tasks">${ts.map(t => { const late = !t.done_at && t.due_date && hrDays(t.due_date) < 0;
       return `<li class="${t.done_at ? 'done' : late ? 'late' : ''}"><label><input type="checkbox" data-task="${t.id}" ${t.done_at ? 'checked' : ''} ${can(t) && o.status !== 'cancelled' ? '' : 'disabled'}><span><b>${esc(t.title)}</b>
-        ${t.note ? `<small>${esc(t.note)}</small>` : ''}<small class="muted">${t.done_at ? `Done by ${esc(t.done_by_name || '')} · ${fd(t.done_at)}${t.done_note ? ' · ' + esc(t.done_note) : ''}` : t.due_date ? `Due ${fd(t.due_date)}${late ? ' · late' : ''}` : ''}</small></span></label></li>`; }).join('')}</ul></div>`).join('')}</div></section>`;
+        ${t.note ? `<small>${esc(t.note)}</small>` : ''}<small class="muted">${t.done_at ? `Done by ${esc(t.done_by_name || '')} · ${fd(t.done_at)}${t.done_note ? ' · ' + esc(t.done_note) : ''}` : t.due_date ? `Due ${fd(t.due_date)}${late ? ' · late' : ''}` : ''}</small></span></label>${ctx === 'admin' && o.status !== 'cancelled' && pcCan('view-onboarding', 'manage-onboarding-checklists')
+        ? `<button type="button" class="btn small pf-ib on-tedit" data-tedit="${t.id}" data-title="${esc(t.title)}" data-owner="${esc(t.owner)}" data-due="${esc(t.due_date || '')}" data-note="${esc(t.note || '')}" data-n="${o.tasks.length}" title="Edit or remove this task" aria-label="Edit task">${ico('edit')}</button>` : ''}</li>`; }).join('')}</ul></div>`).join('')}</div></section>`;
 }
 function onBindCards(main) {
+  // 3.0.5u: HR edits or removes a task in one person's onboarding
+  main.addEventListener('click', e => { const b = e.target.closest('[data-tedit]'); if (!b) return; const x = b.dataset;
+    pcEdit({ title: 'Edit task', wide: false, fields: [{ k: 'title', l: 'Task', req: true }, { k: 'owner', l: 'Done by', t: 'radio', opts: Object.entries(ON_OWN) }, { k: 'due_date', l: 'Due', t: 'date', hint: 'Leave empty for no due date.' }, { k: 'note', l: 'Note', t: 'textarea', rows: 2 }],
+      vals: { title: x.title, owner: x.owner, due_date: x.due, note: x.note },
+      save: async v => { await q(sb.rpc('hr_onb_task', { p_id: +x.tedit, p_action: 'edit', p_data: { title: v.title, owner: v.owner, due_date: v.due_date || '', note: v.note || '' } })); toast('Task updated'); render({ quiet: true }); },
+      del: +x.n > 1 ? { label: 'Remove task', title: 'Remove this task?', yes: 'Remove task', ok: 'Task removed', text: `“${esc(x.title)}” comes off this person’s onboarding only. The checklist doesn’t change.`,
+        run: () => q(sb.rpc('hr_onb_task', { p_id: +x.tedit, p_action: 'delete', p_data: {} })) } : null }); });
   main.addEventListener('change', async e => {
     const t = e.target.closest('[data-task]'); if (t) { await pcTry(() => q(sb.rpc('hr_onb_task', { p_id: +t.dataset.task, p_action: t.checked ? 'done' : 'undo' })), t.checked ? 'Done' : 'Reopened'); return render({ quiet: true }); }
     const a = e.target.closest('[data-onact]'); if (!a || !a.value) return; const id = +a.dataset.onact, act = a.value; a.value = '';
@@ -68,12 +76,28 @@ function onProbTable(id, rows, ctx) {
     { l: 'Status', v: r => r.pending ? 0 : r.days_left, f: r => onProbChip(r) + (r.pending?.step ? `<br><small class="muted">with ${esc(r.pending.step)}</small>` : ''), csv: r => r.pending ? 'Confirmation waiting' : onDays(r.days_left) },
     { l: '', cls: 'num', sort: false, csv: false, f: r => `<span class="pc-acts">${ctx === 'admin' && !r.assessment && pcCan('create-performance-review', 'create-appraisal-period', 'view-probation-tracker') ? `<button class="btn small" data-assess="${r.employee_id}">Start assessment</button>` : ''}
         ${r.assessment && ctx === 'admin' ? `<a class="btn small" href="#/people/admin/perf/appraisals?p=${r.assessment.period_id}">Assessment</a>` : r.assessment && ctx === 'sup' ? `<a class="btn small" href="${base}/${r.assessment.id}">Assessment</a>` : ''}
-        ${!r.pending && (ctx === 'admin' ? pcCan('employee-confirmation') : r.direct) ? `<button class="btn small primary" data-confirm="${r.employee_id}">Recommend</button>` : ''}</span>` }], rows,
+        ${!r.pending && (ctx === 'admin' ? pcCan('employee-confirmation') : r.direct) ? `<button class="btn small primary" data-confirm="${r.employee_id}">Recommend</button>` : ''}
+        ${r.pending && (r.pending.mine || (ctx === 'admin' && pcCan('employee-confirmation'))) ? `<button class="btn small" data-cfw="${r.pending.id}" data-name="${esc(r.name)}">${ico('undo')}Withdraw</button>` : ''}</span>` }], rows,
     { noun: 'employee', csv: 'Probation', empty: ctx === 'admin' ? 'Nobody is on probation.' : 'Nobody in your team is on probation.',
       filters: [{ k: 's', l: 'Status', opts: [['soon', 'Due in 30 days'], ['over', 'Overdue'], ['wait', 'Confirmation waiting']], test: (r, v) => v === 'wait' ? !!r.pending : v === 'over' ? r.days_left < 0 : r.days_left <= 30 }] });
 }
+// 3.0.5u: past confirmations from before Nest: HRIS dates, a “Confirmed” line in the job history, and onboarding marked done
+const CF_PAST_COLS = [{ k: 'who', l: 'who', w: 26 }, { k: 'start_date', l: 'start_date', w: 13 }, { k: 'probation_months', l: 'probation_months', w: 17 }, { k: 'confirmed_on', l: 'confirmed_on', w: 14 }];
+const CF_PAST_NOTES = [['who', 'Staff ID, work email or full name.'], ['start_date', 'Optional. Their start date. Empty keeps what HRIS has.'], ['probation_months', 'Optional. Empty keeps what HRIS has.'], ['confirmed_on', 'The day they were confirmed. Dates as YYYY-MM-DD or DD/MM/YYYY.']];
+function onPastUpload() {
+  return pcUploadDlg({ title: 'Upload past confirmations', sub: 'For staff confirmed before Nest. Their HRIS record gets the dates, the job history gets a “Confirmed” line, and they are marked as onboarded.', notes: CF_PAST_NOTES,
+    template: () => pcXlsx('Past confirmations template.xlsx', CF_PAST_COLS, [{ who: 'GES0042026', start_date: '2023-02-01', probation_months: 6, confirmed_on: '2023-08-01' }], { sheet: 'Confirmations', notes: CF_PAST_NOTES }),
+    run: rows => q(sb.rpc('hr_confirm_historic_upload', { p_rows: rows })), done: r => `${plural(r.added, 'person', 'people')} updated` });
+}
+// 3.0.5u: withdraw a confirmation recommendation that is still waiting
+async function onWithdraw(id, name) {
+  return pcEdit({ title: 'Withdraw the recommendation?', sub: `For ${esc(name)}. The approval stops and you can recommend again.`, wide: false, submit: 'Withdraw', danger: true,
+    fields: [{ k: 'note', l: 'Why (optional)', t: 'textarea', rows: 2 }],
+    save: async v => { await q(sb.rpc('hr_confirm_withdraw', { p_id: id, p_note: v.note || null })); toast('Recommendation withdrawn'); render({ quiet: true }); } });
+}
 function onBindProb(main, rows) {
   main.addEventListener('click', async e => {
+    const w = e.target.closest('[data-cfw]'); if (w) return onWithdraw(+w.dataset.cfw, w.dataset.name);
     const c = e.target.closest('[data-confirm]'); if (c) return onConfirmForm(rows().find(r => r.employee_id === +c.dataset.confirm));
     const a = e.target.closest('[data-assess]'); if (a) { const r = rows().find(x => x.employee_id === +a.dataset.assess);
       if (!await pcConfirm('Start the end-of-probation assessment?', `${esc(r.name)} does a self-appraisal, then ${esc(r.manager || 'their line manager')} scores it and recommends a confirmation.`, 'Start', false)) return;
@@ -121,9 +145,14 @@ ON.pages.confirmations = { perms: ['employee-confirmation', 'view-approval-reque
       pcTable('oncf', [{ l: 'Employee', v: r => pcName(r.employee_id), f: r => pcPerson(hrCard(r.employee_id) || { name: pcName(r.employee_id) }, `Raised by ${esc(r.raised_by_name || '')} · ${fd(r.created_at)}`) },
         { l: 'Recommendation', v: r => r.decision, f: r => pcChip(...CF_DEC[r.decision]) + (r.extend_months ? ` <small>${plural(r.extend_months, 'month')}</small>` : ''), csv: r => CF_DEC[r.decision][1] },
         { l: 'Probation ended', v: r => r.due_date, f: r => fd(r.due_date) }, { l: 'Score', cls: 'num', v: r => +r.score || -1, f: r => r.score != null ? pfPct(r.score) : '—' }, { l: 'Reason', v: r => r.note || '' , f: r => esc(r.note || '') },
-        { l: 'Status', v: r => r.status, f: r => pcChip(...CF_ST[r.status]), csv: r => CF_ST[r.status][1] }], rows,
-      { noun: 'confirmation', csv: pcCan('export-confirmation-requests') ? 'Confirmations' : null, empty: 'No confirmations yet.', 
+        { l: 'Status', v: r => r.status, f: r => pcChip(...CF_ST[r.status]) + (r.historic ? ' ' + pcChip('muted', 'Past record') : ''), csv: r => CF_ST[r.status][1] },
+        { l: '', cls: 'num', sort: false, csv: false, f: r => r.status === 'pending' && (pcCan('employee-confirmation') || r.raised_by === hrMe()?.id) ? `<button class="btn small" data-cfw="${r.id}" data-name="${esc(pcName(r.employee_id))}">${ico('undo')}Withdraw</button>` : '' }], rows,
+      { noun: 'confirmation', csv: pcCan('export-confirmation-requests') ? 'Confirmations' : null, empty: 'No confirmations yet.', actions: pcCan('employee-confirmation') ? `<button class="btn small" type="button" id="cfpast">${ico('up')}Upload past records</button>` : '', 
         filters: [{ k: 's', l: 'Status', opts: Object.entries(CF_ST).map(([k, v]) => [k, v[1]]), test: (r, v) => r.status === v }] });
+  },
+  bind(main) {
+    main.addEventListener('click', e => { const w = e.target.closest('[data-cfw]'); if (w) onWithdraw(+w.dataset.cfw, w.dataset.name); });
+    const u = $('#cfpast', main); if (u) u.onclick = () => onPastUpload();
   }
 };
 ON.pages.checklists = { perms: ['manage-onboarding-checklists'],
@@ -141,7 +170,10 @@ ON.pages.checklists = { perms: ['manage-onboarding-checklists'],
           { k: 'is_default', l: 'Default checklist', t: 'switch', hint: 'Starts by itself for new staff.' }, { k: 'active', l: 'In use', t: 'switch' }], vals: t,
         onOpen: d => d.addEventListener('click', e => { if (e.target.closest('[data-tadd]')) $('.on-trows', d).insertAdjacentHTML('beforeend', row({})); const x = e.target.closest('[data-tdel]'); if (x && $$('.on-trow', d).length > 1) x.closest('.on-trow').remove(); }),
         save: async (v, d) => { const tasks = $$('.on-trow', d).map(r => ({ title: $('[data-t=title]', r).value.trim(), owner: $('[data-t=owner]', r).value, days: +$('[data-t=days]', r).value || 0, note: $('[data-t=note]', r).value.trim() })).filter(x => x.title);
-          await q(sb.rpc('hr_onb_template_save', { p: { ...v, id: t.id || null, tasks } })); toast('Saved'); render({ quiet: true }); } }); });
+          await q(sb.rpc('hr_onb_template_save', { p: { ...v, id: t.id || null, tasks } })); toast('Saved'); render({ quiet: true }); },
+        del: t.id ? { label: 'Delete checklist', title: 'Delete this checklist?', yes: 'Delete checklist', ok: 'Checklist deleted',
+          text: `“${esc(t.name)}” is removed. People already onboarding with it keep their tasks.${t.is_default ? ' It is the default, so choose another default checklist afterwards.' : ''}`,
+          run: () => q(sb.rpc('hr_onb_template_delete', { p_id: t.id })) } : null }); });
   }
 };
 ON.pages.settings = { perms: ['view-confirmation-settings'],
@@ -219,10 +251,21 @@ PR.pages[''] = { perms: ['view-promotion-management-menu', 'promotion-report'],
 };
 PR.pages.history = { perms: ['view-promotion-management-menu', 'promote-staff', 'view-salary-review'],
   async load() { const rows = await q(sb.rpc('hr_promo_list', { p_scope: 'admin' }));
-    return topbar('Promotions & salary reviews', 'Every promotion and salary review, where it is, and when it applies.', (pcCan('create-salary-review') ? `<button class="btn" id="prbulk">${ico('up')}Salary reviews after a cycle</button>` : '') + (pcCan('promote-staff', 'create-salary-review') ? `<button class="btn primary" id="prnew">${ico('plus')}Promote or review</button>` : '')) +
+    return topbar('Promotions & salary reviews', 'Every promotion and salary review, where it is, and when it applies.', (pcCan('promote-staff', 'create-salary-review') ? `<button class="btn" id="prpast">${ico('up')}Upload past records</button>` : '') + (pcCan('create-salary-review') ? `<button class="btn" id="prbulk">${ico('up')}Salary reviews after a cycle</button>` : '') + (pcCan('promote-staff', 'create-salary-review') ? `<button class="btn primary" id="prnew">${ico('plus')}Promote or review</button>` : '')) +
       prRows('prall', rows, { admin: true, csv: 'Promotions and salary reviews', empty: 'No promotions or salary reviews yet.' }); },
-  bind(main) { prBind(main); const b = $('#prnew', main); if (b) b.onclick = () => prForm(null); const k = $('#prbulk', main); if (k) k.onclick = prBulk; }
+  bind(main) { prBind(main); const b = $('#prnew', main); if (b) b.onclick = () => prForm(null); const k = $('#prbulk', main); if (k) k.onclick = prBulk; const pp = $('#prpast', main); if (pp) pp.onclick = prPastUpload; }
 };
+// 3.0.5u: past promotions and salary reviews: written as applied, with a job history line. Today’s record isn’t changed.
+function prPastUpload() {
+  const money = pcAcc().perms.includes('view-salary-amounts') || pcAcc().perms.includes('view-employee-private-data') || pcAcc().super;
+  const cols = [{ k: 'who', l: 'who', w: 24 }, { k: 'kind', l: 'kind', w: 14 }, { k: 'effective_date', l: 'effective_date', w: 14 }, { k: 'from_job_role', l: 'from_job_role', w: 24 }, { k: 'to_job_role', l: 'to_job_role', w: 24 },
+    { k: 'from_grade', l: 'from_grade', w: 12 }, { k: 'to_grade', l: 'to_grade', w: 12 }, { k: 'to_department', l: 'to_department', w: 22 }, ...(money ? [{ k: 'from_salary', l: 'from_salary', w: 13 }, { k: 'to_salary', l: 'to_salary', w: 13 }] : []), { k: 'reason', l: 'reason', w: 34 }];
+  const notes = [['who', 'Staff ID, work email or full name.'], ['kind', 'promotion or salary review.'], ['effective_date', 'The day it applied. Past dates only.'],
+    ['job roles, grades, department', 'Names exactly as in PeopleCore. A promotion needs the new job role or grade.'], ...(money ? [['salaries', 'Annual gross, numbers only. A salary review needs the new salary.']] : []), ['reason', 'Optional.']];
+  return pcUploadDlg({ title: 'Upload past promotions & salary reviews', sub: 'From before Nest. Each is recorded as applied and gets a line in the person’s job history. Their current job role, grade and salary don’t change.', notes,
+    template: () => pcXlsx('Past promotions template.xlsx', cols, [{ who: 'GES0042026', kind: 'promotion', effective_date: '2024-01-01', from_job_role: 'Slickline Operator', to_job_role: 'Slickline Supervisor', from_grade: 'G5', to_grade: 'G6', reason: '2023 appraisal' }], { sheet: 'Promotions', notes }),
+    run: rows => q(sb.rpc('hr_promo_historic_upload', { p_rows: rows })), done: r => `${plural(r.added, 'record')} added` });
+}
 async function prBulk() {
   const cycles = (await pfCycles()).filter(c => c.kind === 'appraisal'); const cur = cycles.find(c => c.status === 'completed') || cycles[0];
   const per = cur ? (await q(sb.from('hr_perf_periods').select('*').eq('cycle_id', cur.id).eq('kind', 'appraisal').order('start_date', { ascending: false })))[0] : null;

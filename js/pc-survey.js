@@ -146,20 +146,42 @@ SV.pages[''] = { perms: ['view-survey', 'create-survey', 'view-survey-results'],
 SV.pages.questions = { perms: ['manage-survey-questions', 'create-survey'],
   async load() {
     const [cats, rows] = await Promise.all([q(sb.from('hr_survey_categories').select('*').order('name')), q(sb.from('hr_survey_questions').select('*').order('id'))]); Object.assign(this, { cats, rows });
-    return topbar('Question library', 'Questions you can reuse across surveys, grouped by category.', `<button class="btn" data-svc="new">${ico('plus')}New category</button><button class="btn primary" data-svq="new">${ico('plus')}New question</button>`) +
+    return topbar('Question library', 'Questions you can reuse across surveys, grouped by category.', `<button class="btn" data-svc="list">${ico('grid')}Categories (${cats.length})</button><button class="btn primary" data-svq="new">${ico('plus')}New question</button>`) +
       pcTable('svq', [{ l: 'Question', v: r => r.text, f: r => `<b>${esc(r.text)}</b>${r.required ? ' <i class="req">*</i>' : ''}${r.active ? '' : ' ' + pcChip('muted', 'Off')}${r.options?.length ? `<br><small class="muted">${esc(r.options.join(' · '))}</small>` : ''}` },
         { l: 'Answer', v: r => SV_KIND[r.kind] }, { l: 'Category', v: r => cats.find(c => c.id === r.category_id)?.name || '', f: r => esc(cats.find(c => c.id === r.category_id)?.name || '—') },
         { l: '', cls: 'num', sort: false, csv: false, f: r => `<button class="btn small" data-svq="${r.id}">Edit</button>` }], rows,
         { noun: 'question', csv: 'Survey questions', filters: [{ k: 'c', l: 'Category', opts: cats.map(c => [c.id, c.name]), test: (r, v) => r.category_id === +v }] });
   },
   bind(main) { main.addEventListener('click', e => {
-    const c = e.target.closest('[data-svc]'); if (c) return pcEdit({ title: 'New category', wide: false, fields: [{ k: 'name', l: 'Name', req: true }, { k: 'description', l: 'Description' }], save: async v => { await q(sb.rpc('hr_survey_cat_save', { p: v })); toast('Saved'); render({ quiet: true }); } });
+    const c = e.target.closest('[data-svc]'); if (c) return svCategories(this.cats, this.rows);
     const b = e.target.closest('[data-svq]'); if (!b) return; const r = b.dataset.svq === 'new' ? { kind: 'short', required: true, active: true } : this.rows.find(x => x.id === +b.dataset.svq);
     pcEdit({ title: r.id ? 'Edit question' : 'New question', wide: false, fields: [{ k: 'text', l: 'Question', req: true }, { k: 'kind', l: 'Answer', t: 'select', blank: false, opts: Object.entries(SV_KIND) },
         { k: 'options', l: 'Answers to choose from (one per line)', t: 'textarea', show: v => ['single', 'multi', 'dropdown'].includes(v.kind) }, { k: 'category_id', l: 'Category', t: 'select', opts: this.cats.map(x => [x.id, x.name]) },
         { k: 'required', l: 'Required', t: 'switch' }, ...(r.id ? [{ k: 'active', l: 'In the library', t: 'switch' }] : [])], vals: { ...r, options: (r.options || []).join('\n') },
-      save: async v => { await q(sb.rpc('hr_survey_q_save', { p: { ...v, id: r.id || null, options: (v.options || '').split('\n').map(s => s.trim()).filter(Boolean) } })); toast('Saved'); render({ quiet: true }); } }); }); }
+      save: async v => { await q(sb.rpc('hr_survey_q_save', { p: { ...v, id: r.id || null, options: (v.options || '').split('\n').map(s => s.trim()).filter(Boolean) } })); toast('Saved'); render({ quiet: true }); },
+      del: r.id && pcCan('manage-survey-questions') ? { label: 'Delete question', title: 'Delete this question?', yes: 'Delete question', ok: 'Question deleted',
+        text: `“${esc(r.text)}” comes out of the library and of any survey it is on. If people have already answered it, it can’t be deleted: switch off “In the library” instead.`,
+        run: () => q(sb.rpc('hr_survey_q_delete', { p_id: r.id })) } : null }); }); }
 };
+
+// 3.0.5u: categories: add, rename, delete (questions in a deleted category stay, with no category)
+function svCategories(cats, rows) {
+  const n = id => rows.filter(r => r.category_id === id).length; const man = pcCan('manage-survey-questions');
+  const edit = c => pcEdit({ title: c ? 'Rename category' : 'New category', wide: false, fields: [{ k: 'name', l: 'Name', req: true }, { k: 'description', l: 'Description' }], vals: c || {},
+    save: async v => { await q(sb.rpc('hr_survey_cat_save', { p: { ...v, id: c?.id || null } })); toast(c ? 'Category renamed' : 'Category added'); render({ quiet: true }); } });
+  return modal({ title: 'Question categories', sub: 'Group questions so they are easier to find when you build a survey.', submit: null, cancel: 'Close',
+    body: `${cats.length ? `<ul class="pc-mlist">${cats.map(c => `<li><div class="main"><b>${esc(c.name)}</b><small>${plural(n(c.id), 'question')}${c.description ? ' · ' + esc(c.description) : ''}</small></div>
+        <div class="end"><button class="btn small" type="button" data-ce="${c.id}">${ico('edit')}Rename</button>${man ? `<button class="btn small danger-ghost" type="button" data-cd="${c.id}">${ico('trash')}Delete</button>` : ''}</div></li>`).join('')}</ul>`
+      : '<div class="pc-empty">No categories yet.</div>'}
+      <div class="mt"><button class="btn" type="button" data-cn>${ico('plus')}New category</button></div>`,
+    onOpen: (d, close) => {
+      $('[data-cn]', d).onclick = () => { close(null); edit(null); };
+      $$('[data-ce]', d).forEach(b => b.onclick = () => { close(null); edit(cats.find(c => c.id === +b.dataset.ce)); });
+      $$('[data-cd]', d).forEach(b => b.onclick = async () => { const c = cats.find(x => x.id === +b.dataset.cd); close(null);
+        if (!await pcConfirm('Delete this category?', `“${esc(c.name)}” is removed.${n(c.id) ? ` Its ${plural(n(c.id), 'question')} stay in the library with no category.` : ''}`, 'Delete category')) return;
+        await pcTry(() => q(sb.rpc('hr_survey_cat_delete', { p_id: c.id })), 'Category deleted'); render({ quiet: true }); });
+    } });
+}
 
 // ================================================================ hooks into Performance and Onboarding
 // the appraisal view shows the cycle's survey: the employee answers it, the line manager reads the answers
