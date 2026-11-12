@@ -1,4 +1,4 @@
-# GANKCO Nest: version 3.0.5 with its update (PeopleCore: Performance, Onboarding & Confirmation, Promotions & Salary Reviews, Competency, Surveys)
+# GANKCO Nest: version 3.0.6 (PeopleCore: Payroll, and the new employee upload)
 
 *Built to support engineered solutions.*
 
@@ -9,7 +9,43 @@
 - **Emails:** sent by Brevo from **nest-alerts@gankcoenergy.com** as "GANKCO Nest". Sign-in emails use Supabase's custom SMTP (templates in Supabase → Authentication → Emails → Templates). Alert emails use the Brevo API key saved in Supabase Vault as `brevo_api_key`, on a schedule (pg_cron).
 - **DNS (company IT):** `nest` CNAME → `gankco-energy.github.io`, plus the Brevo verification records.
 
-## Install the 3.0.5 update (about 3 minutes)
+## Install 3.0.6 (about 5 minutes)
+
+3.0.5 and its update must already be installed.
+
+1. **Supabase → SQL Editor:** the upgrade comes in **2 parts**. For **`22-nest-v3.0.6-upgrade-part1.sql`** and then **`part2.sql`**: open a **New query**, paste the whole file, press **Run**. Part 1 ends with *Part 1 of 2 done*; part 2 ends with **Nest 3.0.6 installed**. Each part is all-or-nothing and safe to run again. (If you ran an earlier copy of part 1, run this part 1 again: it brings the new payslip design.)
+2. **GitHub:** unzip **`gankco-nest-v3.0.6.zip`** and upload everything into **github.com/gankco-energy/gankco-nest**, then commit. Keep the `CNAME` file.
+3. Reload Nest (**Ctrl + Shift + R**). Open tabs also show a **Reload** bar. The footer says **v3.0.6**.
+
+### Setting up payroll (HR, once)
+1. **Who can run it:** HR Admin has every payroll permission; Finance can view and download. Give anyone else what they need in *Nest admin → Roles* (module **Payroll**: view, run, reopen, settings, pay records, approve rent relief, upload past payroll, downloads).
+2. **Payroll → Settings → Allowances & deductions:** check the seven allowances (Gross pay, Cost of living, Housing (quarterly), Transport, Leave (on request), Meal, Airtime) and their frequency and month. As in SeamlessHR, **tax and pension come from Gross pay only**; the other allowances are add-ons paid on top, with no tax and no pension (each allowance has *Taxed* and *Counts for pension* switches if that ever changes).
+3. **Settings → Paygrades:** for each paygrade, set the amounts. Housing 15%, Transport 5% and Leave 20% come pre-set; **fixed amounts (Cost of living, Meal, Airtime) start empty and must be filled in**. *Gross pay* is each person's annual gross pay from their pay record (or the paygrade minimum); percentages are of Gross pay. Use **Also apply to** to copy a grade.
+4. **Settings → Company:** pension employer code, WHT payer ID, and the PAYE payer ID for each state you pay into.
+5. **Settings → Tax:** the Nigeria Tax Act 2025 bands are loaded (0% on the first ₦800k up to 25% above ₦50m), with pension 8%/10%, NSITF 1%, ITF 1%, rent relief 20% capped at ₦500k. NHF and NHIS are off; switch them on if you deduct them.
+6. **Pay records:** fill in bank, BVN, PFA and RSA PIN, tax type (PAYE, WHT for contractors, or none), PAYE state and annual Gross pay for each person (before the add-ons). The quickest way is the new employee upload (below). *Missing details* lists anyone who isn't ready.
+7. **Past payroll** (optional): *Payroll → Past payroll → Upload*, one row per person per month, from the SeamlessHR export. These feed year-to-date and the comparison with last month.
+8. **Parallel run:** for the first month, run payroll in both SeamlessHR and Nest, then use **Compare with SeamlessHR** on the Nest run with SeamlessHR's payroll export. Check any differences before you switch over.
+
+### The new employee upload
+*HRIS → Employees → Upload* now matches SeamlessHR's **Add Employee** template. **Download the general template**, or **Generate your own template** to choose columns (the required ones stay locked). Upload a CSV or Excel file, then **Validate** shows every problem by row and column before anything is saved, then **Process**. The same file adds new staff and updates existing staff (matched on Staff ID); a blank cell leaves that detail as it is.
+
+**Sign-up links:** for new staff with an email, Nest can send a sign-up link. People who already have a Nest account are linked to their record instead, and nobody gets a link twice. You can also send one later from the person's record (*Send sign-up link*).
+
+### What's new in 3.0.6
+- **Payroll** (PeopleCore → Payroll): settings for allowances, paygrades, tax, change types, payslips and company IDs; a pay record for each person (own amounts, recurring deductions like loans, rent relief with proof and HR approval, pay arrears); a monthly run that gathers changes on its own (overtime and expenses sent to payroll, leave allowance, loan instalments, arrears from backdated promotions), calculates with workings you can open for each person, compares with last month, and closes.
+- **Closing a run** marks what it paid (expenses, overtime, leave allowance, loan instalments), emails each person their payslip as a PDF, and lets staff download it under **Pay** (staff side) for any month. **Reopen** (with a reason) undoes all of that; payslips sent again are marked *revised*.
+- **Off-cycle runs** for bonuses or corrections after a month is closed; extra pay is taxed at the person's top rate.
+- **Downloads:** bank schedule (plain Excel for now), PAYE by state, pension by PFA, NSITF/ITF, the full report and all payslips in one PDF; year-to-date by person under *Reports*.
+- **Payslips:** two layouts like SeamlessHR's: **Payslip** (company address and contacts, job role, bank details) and **Exclusive payslip** (name, employee code, department). Both show earnings and deductions side by side, net pay in words, employer contributions and, on the full one, year to date. Choose, adjust and preview them under *Settings → Payslips*; the company details printed at the top are under *Settings → Company*.
+- **Expense and overtime requests:** HR can press **Pay with payroll** so they are paid in the next run.
+- **Employee upload** in the SeamlessHR format, with validation and sign-up links (above).
+
+### Still open
+- **Bank schedule format:** waiting for HR to confirm the bank's format; it's a plain Excel list until then.
+- **Suspension without pay** isn't handled yet; use an *Other deduction* change for now.
+
+## Install the 3.0.5 update (already done, for reference)
 
 3.0.5 is already installed, so this update needs **one SQL file**:
 

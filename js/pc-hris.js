@@ -190,6 +190,8 @@ async function pcProfile(id, mode, sec) {
   const acts = admin ? [pcCan('edit-employee') && `<a class="btn" href="#/people/admin/hris/edit/${e.id}">${ico('edit')}Edit</a>`,
     pcCan('redeploy-employees') && `<button class="btn" data-redeploy>${ico('move')}Redeploy</button>`,
     pcCan('manage-contracts', 'extend-contracts') && `<button class="btn" data-contract>${ico('cert')}Contract</button>`,
+    !e.profile_id && (e.work_email || e.personal_email) && pcCan('add-employee', 'upload-employees', 'edit-employee') && `<button class="btn" data-invite>${ico('user')}Send sign-up link</button>`,
+    pcCan('view-payroll', 'manage-pay-records') && typeof pyRecord === 'function' && `<button class="btn" data-payrec>${ico('pay')}Pay record</button>`,
     e.status === 'active' && pcCan('deactivate-employee') && `<button class="btn" data-status="suspended">Deactivate</button>`,
     e.status !== 'active' && pcCan('activate-employee') && `<button class="btn" data-status="active">Activate</button>`,
     e.status !== 'exited' && pcCan('mark-employee-as-exited') && `<button class="btn danger" data-status="exited">Mark as exited</button>`].filter(Boolean).join('') : '';
@@ -234,6 +236,8 @@ function pcBindProfile(main, id, mode) {
     if (ev.target.closest('[data-lines]')) return pcLinesEdit(e, back);
     if (ev.target.closest('[data-redeploy]')) return pcRedeployForm([id], back);
     if (ev.target.closest('[data-contract]')) return pcContractForm([id], e, back);
+    if (ev.target.closest('[data-invite]')) { const r = await pcTry(() => q(sb.rpc('hr_invite_send', { p_emp: id }))); return toast(r === 'on_nest' ? 'They are already on Nest' : 'Sign-up link sent'); }
+    if (ev.target.closest('[data-payrec]')) return pyRecord(id);
     if (ev.target.closest('[data-adddoc]')) return hrAddDoc(id).then(r => { if (r) back(); });
     const st = ev.target.closest('[data-status]');
     if (st) {
@@ -289,29 +293,99 @@ const PC_UP_COLS = [['emp_no', 'Staff ID', ['staff id', 'employee id', 'staff nu
   ['cost_centre', 'Cost centre', ['cost centre', 'cost center']], ['grade', 'Paygrade', ['pay grade', 'paygrade', 'grade', 'level']], ['start_date', 'Date of employment', ['date of employment', 'resumption date', 'employment date', 'hire date', 'start date', 'date joined']],
   ['end_date', 'End date', ['end date', 'end date of employment', 'contract end date']], ['supervisor', 'Supervisor staff ID or email', ['supervisor', 'supervisor id', 'supervisor email', 'line manager', 'manager']],
   ['address', 'Address', ['address', 'home address', 'residential address']], ['nationality', 'Nationality', ['nationality']], ['state_of_origin', 'State of origin', ['state of origin', 'state']], ['personal_email', 'Personal email', ['personal email']]];
+const PC_UP3 = [["first_name", "First Name", 1], ["last_name", "Surname", 1], ["gender", "Gender (Male/Female/Others)", 1], ["phone_cc", "Phone Number Country Code", 1], ["mobile", "Phone Number", 1], ["emp_no", "Staff ID", 1], ["job_role", "Job Role", 1], ["pay_group", "Paygroup", 1], ["grade", "Paygrade", 1], ["department", "Department", 1], ["dept_tag", "Department Tag (Department, Unit)", 1], ["start_date", "Employment Start Date (DD/MM/YYYY)", 1], ["emp_type", "Contract Type (Full Time, Contract, Intern, etc)", 1], ["region", "Region", 1], ["location", "Location(Branch)", 1], ["middle_name", "Middle Name", 0], ["send_login", "Send Login Details (Yes, No)", 0], ["marital_status", "Marital Status (Single, Married, Divorced, Widowed, Separated)", 0], ["date_of_birth", "Date of Birth (DD/MM/YYYY)", 0], ["country_of_origin", "Country Of Origin", 0], ["state_of_origin", "State Of Origin", 0], ["lga", "Local Government", 0], ["work_email", "Email", 0], ["personal_email", "Alternate Email", 0], ["home_cc", "Home Phone Number Country Code", 0], ["home_phone", "Home Phone Number", 0], ["supervisor", "Staff ID of Line Manager", 0], ["ext_company", "Line Manager Company Name", 0], ["pay_arrears", "Pay Arrears (Yes, No)", 0], ["gross", "Gross Salary", 0], ["end_date", "Contract End Date (DD/MM/YYYY)", 0], ["confirmed", "Confirmation Status (Yes, No)", 0], ["emp_tag", "Employee Tag (Blue Collar)", 0], ["confirmed_on", "Confirmation Date (DD/MM/YYYY)", 0], ["cost_centre", "Cost Center", 0], ["house_no", "House Number", 0], ["street", "Street Name", 0], ["landmark", "Landmark", 0], ["bus_stop", "Bus Stop", 0], ["city", "City", 0], ["addr_state", "Address State", 0], ["addr_country", "Address Country", 0], ["postal", "Postal Address", 0], ["kin1_first", "Next of Kin First Name 1", 0], ["kin1_last", "Next of Kin Surname 1", 0], ["kin1_rel", "Next of Kin Relationship 1", 0], ["kin1_cc", "Next of Kin Phone Number Country Code 1", 0], ["kin1_phone", "Next of Kin Phone Number 1", 0], ["kin1_addr", "Next of Kin Address 1", 0], ["kin2_first", "Next of Kin First Name 2", 0], ["kin2_last", "Next of Kin Surname 2", 0], ["kin2_rel", "Next of Kin Relationship 2", 0], ["kin2_cc", "Next of Kin Phone Number Country Code 2", 0], ["kin2_phone", "Next of Kin Phone Number 2", 0], ["kin2_addr", "Next of Kin Address 2", 0], ["spouse_title", "Spouse Title", 0], ["spouse_first", "Spouse First Name", 0], ["spouse_last", "Spouse Surname", 0], ["spouse_cc", "Spouse Phone Number Country Code", 0], ["spouse_phone", "Spouse Phone Number", 0], ["dep1_title", "Dependant Title 1", 0], ["dep1_first", "Dependant First Name 1", 0], ["dep1_last", "Dependant Surname 1", 0], ["dep1_cc", "Dependant Phone Number Country Code 1", 0], ["dep1_phone", "Dependant Phone Number 1", 0], ["dep1_addr", "Dependant Address 1", 0], ["dep2_title", "Dependant Title 2", 0], ["dep2_first", "Dependant First Name 2", 0], ["dep2_last", "Dependant Surname 2", 0], ["dep2_cc", "Dependant Phone Number Country Code 2", 0], ["dep2_phone", "Dependant Phone Number 2", 0], ["dep2_addr", "Dependant Address 2", 0], ["dep3_title", "Dependant Title 3", 0], ["dep3_first", "Dependant First Name 3", 0], ["dep3_last", "Dependant Surname 3", 0], ["dep3_cc", "Dependant Phone Number Country Code 3", 0], ["dep3_phone", "Dependant Phone Number 3", 0], ["dep3_addr", "Dependant Address 3", 0], ["dep4_title", "Dependant Title 4", 0], ["dep4_first", "Dependant First Name 4", 0], ["dep4_last", "Dependant Surname 4", 0], ["dep4_cc", "Dependant Phone Number Country Code 4", 0], ["dep4_phone", "Dependant Phone Number 4", 0], ["dep4_addr", "Dependant Address 4", 0], ["bank_name", "Bank Name", 0], ["account_name", "Bank Account Name", 0], ["account_no", "Account Number", 0], ["sort_code", "Sort Code", 0], ["swift_code", "Swift Code", 0], ["bvn", "Bank Verification Number", 0], ["tin", "Tax Identification Number", 0], ["pfa", "PFA", 0], ["rsa_pin", "Pin Number (RSA)", 0], ["nhf_no", "NHF Number", 0], ["medical_aid", "Medical Aid Plan", 0], ["annual_rent", "Annual Rent (₦)", 0], ["jrb_tax_id", "JRB Tax ID", 0], ["nin", "National Identification Number (NIN)", 0]];
+// 3.0.6: SeamlessHR's Add Employee template. Required columns are always in a template; one file adds and updates.
+const pcUpHead = h => String(h || '').replace(/\*\s*$/, '').trim().toLowerCase().replace(/\s+/g, ' ');
+function pcUpMap(head) {
+  const by = Object.fromEntries(PC_UP3.map(([k, h]) => [pcUpHead(h), k])); PC_UP3.forEach(([k]) => { by[k] = k; });
+  // older Nest templates and SeamlessHR exports
+  PC_UP_COLS.forEach(([k, h, al]) => { const nk = { address: 'street', unit: 'department' }[k] || k; [h, ...al].forEach(a => { if (!by[pcUpHead(a)]) by[pcUpHead(a)] = nk; }); });
+  return head.map(h => by[pcUpHead(h)] || null);
+}
+async function pcUpRead(file) {
+  const ext = (file.name.split('.').pop() || '').toLowerCase(); let rows = [];
+  const cell = v => v == null ? '' : v instanceof Date ? `${String(v.getUTCDate()).padStart(2, '0')}/${String(v.getUTCMonth() + 1).padStart(2, '0')}/${v.getUTCFullYear()}`
+    : typeof v === 'object' ? (v.richText ? v.richText.map(t => t.text).join('') : v.text ?? v.result ?? '') : String(v);
+  if (['xlsx', 'xlsm'].includes(ext)) {
+    await loadScript('vendor/exceljs.min.js'); const wb = new window.ExcelJS.Workbook(); await wb.xlsx.load(await file.arrayBuffer());
+    wb.worksheets[0].eachRow({ includeEmpty: false }, r => { const a = []; r.eachCell({ includeEmpty: true }, (c, i) => { a[i - 1] = cell(c.value).trim(); }); rows.push(a); });
+  } else if (['csv', 'txt'].includes(ext)) {
+    const t = (await file.text()).replace(/^﻿/, ''); let row = [], f = '', qd = false;
+    for (let i = 0; i < t.length; i++) { const ch = t[i];
+      if (qd) { if (ch === '"' && t[i + 1] === '"') { f += '"'; i++; } else if (ch === '"') qd = false; else f += ch; }
+      else if (ch === '"') qd = true; else if (ch === ',') { row.push(f.trim()); f = ''; } else if (ch === '\n' || ch === '\r') { if (ch === '\r' && t[i + 1] === '\n') i++; row.push(f.trim()); rows.push(row); row = []; f = ''; } else f += ch; }
+    if (f || row.length) { row.push(f.trim()); rows.push(row); }
+  } else throw new Error('Use a CSV or Excel (.xlsx) file');
+  const head = rows.shift() || []; const keys = pcUpMap(head);
+  if (!keys.includes('emp_no')) throw new Error('The file needs a Staff ID column. Download a template to see the headings.');
+  const ignored = head.filter((h, i) => h && !keys[i]);
+  const out = rows.filter(r => r.some(x => x)).map(r => { const o = {}; keys.forEach((k, i) => { if (k && r[i] != null && r[i] !== '') o[k] = r[i]; }); return o; });
+  return { rows: out, ignored, cols: keys.filter(Boolean).length };
+}
+function pcUpCsv(keys, file) {
+  const cols = PC_UP3.filter(([k]) => keys.includes(k)); const cellq = s => /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+  const txt = cols.map(([, h, r]) => cellq(h + (r ? '*' : ''))).join(',') + '\n';
+  const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob(['﻿' + txt], { type: 'text/csv' })); a.download = file; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+}
+function pcUpPicker() {
+  return modal({ title: 'Generate your own template', wide: true, submit: 'Generate & download template',
+    sub: 'The required columns (green) are always in it. Tick any others you will fill in.',
+    body: `<div class="notice warn">Any column you pick must have data for the people you upload. A blank cell leaves that detail as it is.</div>
+      <div class="filters"><input type="search" id="upq" placeholder="Search columns…"><label class="check"><input type="checkbox" id="upall"> Select all</label></div>
+      <div class="pc-upcols">${PC_UP3.map(([k, h, r]) => `<label class="pc-upc ${r ? 'req' : ''}"><input type="checkbox" value="${k}" ${r ? 'checked disabled' : ''}> ${esc(h)}</label>`).join('')}</div>`,
+    onOpen: d => {
+      $('#upq', d).oninput = e => { const t = e.target.value.toLowerCase(); $$('.pc-upc', d).forEach(l => { l.hidden = !!t && !l.textContent.toLowerCase().includes(t); }); };
+      $('#upall', d).onchange = e => $$('.pc-upc input:not(:disabled)', d).forEach(c => { if (!c.closest('label').hidden) c.checked = e.target.checked; });
+    },
+    onSubmit: async (_, d) => { pcUpCsv($$('.pc-upc input:checked', d).map(c => c.value), 'create_employee_template.csv'); } });
+}
 async function pcEmpUpload() {
-  await modal({ title: 'Upload employees', wide: true, submit: 'Read file',
-    sub: 'Use a SeamlessHR employee export, or our template. We match columns by their headings (Staff ID, First Name, Department, Job Role, Pay Grade, Supervisor…). Existing staff IDs are updated; new ones are added.',
-    body: `<label class="f">Excel file (.xlsx)<input type="file" name="file" accept=".xlsx" required></label><p><button type="button" class="btn small" id="tpl">${ico('down')}Download our template</button></p>`,
-    onOpen: d => { $('#tpl', d).onclick = () => brandXlsx({ file: `PeopleCore employees template_${localISO(0)}.xlsx`, sheets: [{ name: 'Employees', title: 'PeopleCore employees', columns: PC_UP_COLS.map(([k, h]) => ({ header: h, key: k, width: 18, input: true })), rows: [] }] }); },
+  let file = null, parsed = null, check = null;
+  const step1 = () => `<ol class="pc-up2"><li class="on"><span>1</span>Upload CSV</li><li><span>2</span>Validate CSV</li></ol>
+    <p class="muted">Use SeamlessHR’s Add Employee template, ours, or a SeamlessHR employee export. A new Staff ID adds a person; an existing Staff ID updates them, and a blank cell leaves that detail as it is.</p>
+    <p class="pc-up-tpl"><button type="button" class="btn small" data-own>${ico('edit')}Generate your own template here</button> or <button type="button" class="btn small" data-all>${ico('down')}Download the general template</button></p>
+    <label class="pc-drop"><input type="file" name="file" accept=".csv,.xlsx"><span>${ico('up')}<b>Choose a file</b> or drop it here<small>CSV or Excel (.xlsx)</small></span></label><div data-st></div>`;
+  return modal({ title: 'Employee bulk upload', wide: true, submit: 'Validate', body: `<div data-body>${step1()}</div>`,
+    onOpen: d => {
+      const body = $('[data-body]', d), btn = $('button[type=submit]', d), cx = $('[data-x]', d), closeX = cx.onclick;
+      const wire = () => {
+        $('[data-own]', d).onclick = () => pcUpPicker();
+        $('[data-all]', d).onclick = () => pcUpCsv(PC_UP3.map(([k]) => k), 'create_employee_template.csv');
+        const inp = $('[name=file]', d), drop = $('.pc-drop', d);
+        drop.ondragover = e => { e.preventDefault(); drop.classList.add('over'); }; drop.ondragleave = () => drop.classList.remove('over');
+        drop.ondrop = e => { e.preventDefault(); drop.classList.remove('over'); if (e.dataTransfer.files[0]) { file = e.dataTransfer.files[0]; read(); } };
+        inp.onchange = () => { file = inp.files[0]; read(); };
+      };
+      const read = async () => { const st = $('[data-st]', d); try { parsed = await pcUpRead(file);
+          st.innerHTML = `<div class="notice ok"><b>${esc(file.name)}</b>: ${plural(parsed.rows.length, 'row')}, ${parsed.cols} columns read.${parsed.ignored.length ? ` Not used: ${parsed.ignored.map(esc).join(', ')}.` : ''}</div>`; }
+        catch (x) { parsed = null; st.innerHTML = `<div class="notice warn">${esc(x.message)}</div>`; } };
+      wire();
+      d._step = 1; d._back = () => { d._step = 1; body.innerHTML = step1(); btn.textContent = 'Validate'; btn.disabled = false; cx.textContent = 'Cancel'; cx.onclick = closeX; wire(); if (parsed) read(); };
+      d._show = c => {
+        const inv = c.invites || {}; const good = c.rows - c.bad;
+        body.innerHTML = `<ol class="pc-up2"><li class="done"><span>✓</span>Upload CSV</li><li class="on"><span>2</span>Validate CSV</li></ol>
+          <div class="pc-kpis board">${[[c.rows, 'Rows'], [c.new, 'New employees'], [c.update, 'Updates'], [c.bad, 'With problems', c.bad ? 'warn' : '']].map(([n, l, k]) => `<div class="kpi ${k || ''}"><div class="n">${n}</div><div class="l">${l}</div></div>`).join('')}</div>
+          ${c.bad ? `<div class="pc-sec">Rows with problems (they are skipped; fix them and upload just those again)</div><div class="tablewrap pc-skip"><table class="t"><thead><tr><th>Row</th><th>Employee</th><th>Problems</th></tr></thead><tbody>
+            ${c.errors.map(x => `<tr><td>${x.row}</td><td>${esc(x.who || '—')}</td><td>${x.errors.map(esc).join('<br>')}</td></tr>`).join('')}</tbody></table></div>` : `<div class="notice ok">Every row is fine.</div>`}
+          ${c.notes.length ? `<div class="pc-sec">Will be added to PeopleCore</div><ul class="pc-notes">${c.notes.map(n => `<li>${esc(n)}</li>`).join('')}</ul>` : ''}
+          ${inv.send?.length || inv.on_nest || inv.link || inv.sent_before ? `<div class="pc-sec">Send Login Details</div><ul class="pc-notes">
+            ${inv.send?.length ? `<li><b>${plural(inv.send.length, 'sign-up link')} will be emailed</b>: ${inv.send.map(esc).join(', ')}</li>` : ''}
+            ${inv.on_nest ? `<li>${plural(inv.on_nest, 'person is', 'people are')} already on Nest: nothing is sent</li>` : ''}
+            ${inv.link ? `<li>${plural(inv.link, 'existing account')} will be linked to ${inv.link > 1 ? 'their' : 'the'} employee: nothing is sent</li>` : ''}
+            ${inv.sent_before ? `<li>${plural(inv.sent_before, 'person was', 'people were')} sent a link before: not sent again (re-send from their record)</li>` : ''}</ul>
+            <p class="muted">Someone who signed up with a different email than the one in the file would get a link. Check the names above.</p>` : ''}
+          ${c.private ? '' : '<div class="notice warn">You can’t change locked details (bank, BVN, tax, pension, gross, rent), so those columns are left out.</div>'}`;
+        btn.textContent = good ? `Validate & Process ${plural(good, 'row')}` : 'Nothing to process'; btn.disabled = !good; cx.textContent = 'Back'; cx.onclick = () => d._back();
+      };
+      d._parsed = () => parsed;
+    },
     onSubmit: async (_, d) => {
-      const file = $('[name=file]', d).files[0]; if (!file) throw new Error('Choose a file');
-      await loadScript('vendor/exceljs.min.js'); const wb = new window.ExcelJS.Workbook(); await wb.xlsx.load(await file.arrayBuffer());
-      const val = v => v == null ? '' : v instanceof Date ? v.toISOString().slice(0, 10) : typeof v === 'object' ? (v.richText ? v.richText.map(t => t.text).join('') : v.text ?? v.result ?? '') : String(v);
-      let rows = [];
-      for (const ws of wb.worksheets) {
-        let head = null, map = {};
-        ws.eachRow((row, i) => {
-          const vals = row.values.map(v => val(v).trim());
-          if (!head) { const low = vals.map(v => v.toLowerCase().replace(/\s*\*\s*$/, '').trim()); const m = {}; PC_UP_COLS.forEach(([k, h, al]) => { const ix = low.findIndex(x => x === h.toLowerCase() || al.includes(x)); if (ix > 0) m[k] = ix; }); if (m.first_name && m.last_name) { head = i; map = m; } return; }
-          const o = {}; Object.entries(map).forEach(([k, ix]) => { const v = vals[ix]; if (v) o[k] = v; }); if (o.first_name || o.emp_no) rows.push(o);
-        });
-        if (rows.length) break;
-      }
-      if (!rows.length) throw new Error('No employees found. The sheet needs at least First Name and Last Name columns.');
-      const res = await q(sb.rpc('hr_bulk_employees2', { p_rows: rows }));
-      toast(`${res.added} added · ${res.updated} updated${res.skipped ? ' · ' + res.skipped + ' skipped' : ''}`);
-      if (res.notes?.length) await modal({ title: 'Upload notes', body: `<ul>${res.notes.slice(0, 60).map(n => `<li>${esc(n)}</li>`).join('')}</ul>`, submit: null, cancel: 'Close' });
+      const p = d._parsed();
+      if (d._step === 1) { if (!p?.rows.length) throw new Error('Choose a file with at least one employee');
+        check = await q(sb.rpc('hr_bulk_employees3', { p_rows: p.rows, p_commit: false })); d._step = 2; d._show(check); throw Object.assign(new Error(''), { quiet: true }); }
+      const res = await q(sb.rpc('hr_bulk_employees3', { p_rows: p.rows, p_commit: true }));
+      toast(`${res.added} added · ${res.updated} updated${res.bad ? ' · ' + res.bad + ' skipped' : ''}${res.sent ? ' · ' + plural(res.sent, 'sign-up link') + ' sent' : ''}`);
+      if (res.notes?.length) setTimeout(() => modal({ title: 'Upload notes', body: `<ul>${res.notes.slice(0, 80).map(n => `<li>${esc(n)}</li>`).join('')}</ul>`, submit: null, cancel: 'Close' }), 300);
       pcRefresh();
     } });
 }

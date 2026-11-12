@@ -313,7 +313,7 @@ PF.pages.objectives = { perms: ['view-objective', 'create-objective', 'update-ob
 };
 
 const PF_UP_COLS = ['scope', 'who', 'perspective', 'title', 'description', 'weight', 'measure', 'direction', 'target', 'unit', 'due_date'];
-async function pfReadSheet(file) {
+async function pfReadSheet(file, keepAll) {
   const ext = (file.name.split('.').pop() || '').toLowerCase(); const rows = [];
   if (['xlsx', 'xlsm'].includes(ext)) {
     await loadScript('vendor/exceljs.min.js'); const wb = new ExcelJS.Workbook(); await wb.xlsx.load(await file.arrayBuffer());
@@ -323,7 +323,7 @@ async function pfReadSheet(file) {
   } else throw new Error('Use an Excel (.xlsx) or CSV file');
   const head = (rows.shift() || []).map(h => String(h || '').trim().toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, ''));
   const alias = { applies_to: 'scope', for: 'scope', employee: 'who', name: 'who', objective: 'title', kpi: 'title', due: 'due_date', measured_as: 'measure', better_when: 'direction' };
-  return rows.map(r => Object.fromEntries(head.map((h, i) => [alias[h] || h, r[i] == null ? '' : String(r[i]).trim()]))).filter(r => r.title || r.who);
+  return rows.map(r => Object.fromEntries(head.map((h, i) => [alias[h] || h, r[i] == null ? '' : String(r[i]).trim()]))).filter(r => keepAll ? Object.values(r).some(Boolean) : (r.title || r.who));
 }
 async function pfUpload(cur) {
   return modal({ title: cur.status === 'completed' ? 'Upload past objectives' : 'Bulk upload objectives', sub: `Into ${esc(cur.title)}. One row per objective. A row can be for one person, a department, a job role or the whole company.${cur.status === 'completed' ? ' The cycle is completed, so these go in as approved past records.' : ''}`, submit: 'Upload', wide: true,

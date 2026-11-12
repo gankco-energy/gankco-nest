@@ -423,7 +423,7 @@ sb.auth.onAuthStateChange((event, session) => {
 function whenReady(fn) { if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', () => setTimeout(fn, 0), { once: true }); else setTimeout(fn, 0); }
 async function boot() {
   if (S.recovery) return renderReset();
-  if (!S.session) return renderAuth('signin');
+  if (!S.session) return renderAuth(/^#\/signup/.test(location.hash) ? 'signup' : 'signin');
   try {
     S.profile = await q(sb.from('profiles').select('*').eq('id', S.session.user.id).maybeSingle());
   } catch (e) { return renderAuth('signin', niceError(e)); }

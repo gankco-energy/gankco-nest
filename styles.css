@@ -1777,3 +1777,38 @@ body.viewing-as .me-btn { top: 54px; }
 .on-tasks li .on-tedit { position: absolute; right: 0; top: 6px; opacity: .55; }
 .on-tasks li:hover .on-tedit, .on-tasks li .on-tedit:focus { opacity: 1; }
 .on-tasks li:has(.on-tedit) label { padding-right: 38px; }
+
+/* 3.0.6 payroll and employee upload */
+.py-hid { color: var(--muted); letter-spacing: .05em; }
+.py-head .pf-acts { margin-top: 10px; }
+.py-jl { display: flex; flex-wrap: wrap; gap: 6px 22px; color: var(--muted); font-size: 13px; }
+.py-jl span { display: inline-flex; gap: 6px; align-items: center; } .py-jl svg { width: 15px; height: 15px; }
+.py-dl { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 10px; }
+.py-dlb { justify-content: flex-start; text-align: left; height: auto; padding: 10px 12px; gap: 10px; }
+.py-dlb span { display: flex; flex-direction: column; } .py-dlb small { color: var(--muted); font-weight: 400; }
+.py-wk .py-ps td:last-child { white-space: nowrap; } .py-ps tr.tot td { border-top: 2px solid var(--line); }
+.py-steps { margin: 0; padding-left: 18px; } .py-steps > li { margin: 0 0 10px; }
+.py-steps li b { display: block; } .py-steps li span { color: var(--muted); font-size: 13px; } .py-steps li em { font-style: normal; font-weight: 700; display: block; }
+.py-steps ul { list-style: none; padding: 4px 0 0; margin: 0; } .py-steps ul li { display: flex; justify-content: space-between; gap: 12px; font-size: 13px; margin: 0; }
+.py-steps ul em { display: inline; font-weight: 600; }
+.py-prog { height: 8px; border-radius: 6px; background: var(--line); overflow: hidden; } .py-prog i { display: block; height: 100%; background: var(--brand); transition: width .2s; }
+.py-gi .chip { margin: 2px 2px 0 0; }
+.py-gt input[type=number] { width: 140px; } .py-gt select { min-width: 170px; }
+.py-bands { display: grid; gap: 6px; margin-bottom: 10px; max-width: 520px; }
+.py-band { display: grid; grid-template-columns: 90px 1fr 120px; gap: 8px; align-items: center; } .py-band > span:first-child { color: var(--muted); }
+.py-tn { font: inherit; font-weight: 700; border: 1px dashed transparent; background: none; padding: 2px 4px; min-width: 240px; } .py-tn:hover, .py-tn:focus { border-color: var(--line); }
+.py-rent { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.py-mine .sub b { color: var(--ink); }
+.pc-up2 { display: flex; gap: 24px; list-style: none; padding: 0; margin: 0 0 14px; }
+.pc-up2 li { display: flex; align-items: center; gap: 8px; color: var(--muted); font-weight: 600; }
+.pc-up2 li span { width: 24px; height: 24px; border-radius: 50%; border: 2px solid var(--line); display: grid; place-items: center; font-size: 12px; }
+.pc-up2 li.on, .pc-up2 li.done { color: var(--ink); } .pc-up2 li.on span { border-color: var(--brand); color: var(--brand); } .pc-up2 li.done span { background: var(--ok, #217A4B); border-color: transparent; color: #fff; }
+.pc-up-tpl { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.pc-drop { display: block; border: 2px dashed var(--line); border-radius: 12px; padding: 26px; text-align: center; cursor: pointer; margin: 8px 0; }
+.pc-drop.over, .pc-drop:hover { border-color: var(--brand); background: #FFF7F3; }
+.pc-drop input { display: none; } .pc-drop span { display: flex; flex-direction: column; align-items: center; gap: 4px; } .pc-drop small { color: var(--muted); } .pc-drop svg { width: 22px; height: 22px; }
+.pc-upcols { display: flex; flex-wrap: wrap; gap: 8px; max-height: 380px; overflow: auto; padding: 2px; }
+.pc-upc { display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--line); border-radius: 8px; padding: 6px 10px; font-size: 13px; cursor: pointer; }
+.pc-upc.req { border: 1px dashed #4CAF7D; background: #EEF8F2; }
+.pc-notes { margin: 4px 0 8px; padding-left: 18px; } .pc-notes li { margin: 2px 0; }
+@media (max-width: 640px) { .py-band { grid-template-columns: 70px 1fr 90px; } }
