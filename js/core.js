@@ -109,7 +109,7 @@ const MGMT_MSG = 'You have view-only access to this app, so changes are switched
 const curApp = () => S.shellApp === 'po' ? 'po' : S.shellApp === 'proforma' ? 'proforma' : 'inventory';
 const readOnly = () => !!S.viewAs || appRole(curApp()) === 'viewer';
 (() => {
-  const READ_RPC = new Set(['month_totals', 'period_flows', 'mark_notifications_read', 'log_signed_export', 'save_plan_snapshot', 'alert_status', 'preview_alert']);
+  const READ_RPC = new Set(['month_totals', 'period_flows', 'mark_notifications_read', 'log_signed_export', 'log_export', 'save_plan_snapshot', 'alert_status', 'preview_alert']);
   const blocked = () => { const msg = S.viewAs ? VIEW_MSG : MGMT_MSG; const p = new Proxy(function () { }, { get: (t, k) => k === 'then' ? (res => res({ data: null, error: { message: msg } })) : () => p, apply: () => p }); return p; };
   const _rpc = sb.rpc.bind(sb), _from = sb.from.bind(sb);
   // 3.0: PeopleCore is everyone's own HR self-service, so Management can use it too (but nothing changes while viewing as a role)
@@ -207,6 +207,7 @@ const I = {
   sign: '<path d="M4 20h16"/><path d="M14.5 4.5l3 3L8 17H5v-3z"/>',
   audit: '<path d="M5 3h10l4 4v14H5z"/><path d="M15 3v4h4M8 12h8M8 16h5"/>',
   gear: '<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/>',
+  send: '<path d="M21 3L10 14"/><path d="M21 3l-7 18-4-7-7-4z"/>',
   bell: '<path d="M6 8a6 6 0 1 1 12 0c0 7 3 8 3 8H3s3-1 3-8"/><path d="M10.3 21a1.9 1.9 0 0 0 3.4 0"/>',
   grid: '<rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/>',
   more: '<circle cx="5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="19" cy="12" r="1.6"/>',
@@ -416,7 +417,7 @@ sb.auth.onAuthStateChange((event, session) => {
   if (event === 'PASSWORD_RECOVERY') S.recovery = true;
   const changed = (session?.user?.id || null) !== (S.session?.user?.id || null);
   S.session = session;
-  if (event === 'SIGNED_OUT') { S.profile = null; invalidate(); S.shellReady = false; if (S.channel) { sb.removeChannel(S.channel); S.channel = null; } }
+  if (event === 'SIGNED_OUT') { S.profile = null; S.gate = null; invalidate(); S.shellReady = false; if (S.channel) { sb.removeChannel(S.channel); S.channel = null; } }
   if (event === 'INITIAL_SESSION' || changed || event === 'PASSWORD_RECOVERY' || event === 'SIGNED_OUT') whenReady(boot);
 });
 
@@ -436,7 +437,7 @@ async function boot() {
   if (!isSuper() && !S.depts.some(d => +S.line === d.id)) setLine('');
   if (!S.line && !isSuper() && !isAdmin()) { const m = myLineIds(); if (m.length === 1) setLine(m[0]); }
   refreshAlerts(); subscribe(); checkVersion();
-  S.shellReady = false;
+  S.shellReady = false; S.gate = null;
   render();
   setTimeout(() => { if (typeof refreshPlanSnapshot === 'function' && !S.viewAs) refreshPlanSnapshot(); }, 8000);
 }
@@ -650,7 +651,9 @@ ROUTES.building = { load: async () => `<div class="build-screen"><div class="bui
 ROUTES.noapp = { load: async () => topbar(APP_NAMES[S.shellApp] || 'Nest') + `<div class="notice">You don’t have access to ${esc(APP_NAMES[S.shellApp] || 'this app')}. Ask the Developer if you need it.</div><a class="btn" href="#/">Back to Nest home</a>` };
 let renderSeq = 0;
 async function render(opts = {}) {
-  if (!S.session || !isActive()) return;
+  // 3.0.6: a full-screen step before the app (Finish your profile) stays until the person saves or skips it;
+  // timers, live updates and address changes must not draw the app over it
+  if (!S.session || !isActive() || S.gate) return;
   if (typeof stopScanner === 'function') stopScanner();
   const { parts, params } = parseHash();
   const r = parts[0] || '';
@@ -688,7 +691,7 @@ window.addEventListener('hashchange', () => render());
 // 3.0.3: settings pages show each section as a bar; opening one closes the others. The open one stays open after a save.
 const ACC = { page: null, open: null, seq: 0 };
 function settingsAccordion(main, page) {
-  const secs = $$('section.panel', main).filter(x => !x.parentElement.closest('section.panel'));
+  const secs = $$('section.panel', main).filter(x => !x.parentElement.closest('section.panel') && x.querySelector(':scope > header'));
   if (secs.length < 2) return;
   const first = ACC.page !== page || ACC.seq !== renderSeq - 1; ACC.seq = renderSeq; if (first) { ACC.page = page; ACC.open = null; }
   const anchor = location.hash.split('#')[2] || '';
@@ -743,6 +746,12 @@ function appTile(scope, href, icon, name, desc, meta, live) {
 function lockedTile(icon, name, desc) {
   return `<div class="tile locked" aria-disabled="true" title="You don’t have access to ${name}"><span class="t-ico">${ico(icon)}</span><span class="t-name">${name}<span class="t-lock" aria-hidden="true">${ico('lock')}</span></span><span class="t-desc">${desc}</span><span class="t-meta">You don’t have access. Ask the Developer.</span></div>`;
 }
+// 3.0.7: the home screen arranges itself. Apps you can open come first, in a set order (PeopleCore, Inventory, Purchase Order,
+// PFI & Quote); then apps not open to you yet; apps under maintenance go last and move back when maintenance ends
+function launcherTiles(list) {
+  const rank = ([k, h]) => (k !== 'proforma' && typeof maintWin === 'function' && maintWin(k)) ? 2 : /class="tile live/.test(h) ? 0 : 1;
+  return list.map((x, i) => ({ h: x[1], i, r: rank(x) })).sort((a, b) => a.r - b.r || a.i - b.i).map(x => x.h).join('');
+}
 async function renderLauncher() {
   const p = S.profile; const first = S.viewAs ? '' : (p.full_name || '').split(' ')[0];
   const apps = p.apps || ['inventory'];
@@ -753,14 +762,14 @@ async function renderLauncher() {
     <section class="l-hero"><img class="l-mark" src="brand/mark.png" alt="">
       <div><div class="l-tag">${esc(CFG.TAGLINE || '')}</div><h1>${first ? `Welcome back, ${esc(first)}` : 'Welcome'}</h1>
       <p>Where would you like to go?</p></div></section>
-    <section class="tiles">
-      ${appAllowed('inventory') ? appTile('inventory', '#/dashboard', 'box', 'Inventory', 'Equipment, stock, materials requests, monthly counts and reports.', '<span class="t-meta" id="invMeta">Open</span>', true) : lockedTile('box', 'Inventory', 'Equipment, stock, materials requests, monthly counts and reports.')}
-      ${typeof poCanView === 'function' && poCanView() ? appTile('po', '#/po/overview', 'audit', 'Purchase Order', 'Raise, sign and track purchase orders to OEMs and suppliers.', '<span class="t-meta" id="poMeta">Open</span>', true) : lockedTile('audit', 'Purchase Order', 'Raise, sign and track purchase orders to OEMs and suppliers.')}
-      ${appAllowed('people') && peopleBuilding() ? appTile('people', null, 'users', 'PeopleCore', 'Your HR self-service: profile, leave, requests, approvals and the company directory.', '<span class="t-meta">Under construction</span><span class="t-badge build">Under construction</span>')
+    <section class="tiles">${launcherTiles([
+      ['people', appAllowed('people') && peopleBuilding() ? appTile('people', null, 'users', 'PeopleCore', 'Your HR self-service: profile, leave, requests, approvals and the company directory.', '<span class="t-meta">Under construction</span><span class="t-badge build">Under construction</span>')
         : appAllowed('people') ? appTile('people', '#/people', 'users', 'PeopleCore', 'Your HR self-service: profile, leave, requests, approvals and the company directory.', `<span class="t-meta" id="hrMeta">Open</span>${setting('people_construction', null)?.on ? '<span class="t-badge build">Under construction · testing</span>' : ''}`, true)
         : setting('people_live', false) === true ? lockedTile('users', 'PeopleCore', 'Your HR self-service: profile, leave, requests, approvals and the company directory.')
-        : appTile('people', null, 'users', 'PeopleCore', 'Your HR self-service: profile, leave, requests, approvals and the company directory.', `<span class="t-meta">${setting('people_construction', null)?.on ? 'Under construction' : 'Coming soon'}</span>`)}
-      ${appTile('proforma', null, 'chart', 'Proforma Invoice &amp; Quote', 'Prepare quotes and proforma invoices for clients.', '<span class="t-meta">Coming later</span>')}
+        : appTile('people', null, 'users', 'PeopleCore', 'Your HR self-service: profile, leave, requests, approvals and the company directory.', `<span class="t-meta">${setting('people_construction', null)?.on ? 'Under construction' : 'Coming soon'}</span>`)],
+      ['inventory', appAllowed('inventory') ? appTile('inventory', '#/dashboard', 'box', 'Inventory', 'Equipment, stock, materials requests, monthly counts and reports.', '<span class="t-meta" id="invMeta">Open</span>', true) : lockedTile('box', 'Inventory', 'Equipment, stock, materials requests, monthly counts and reports.')],
+      ['po', typeof poCanView === 'function' && poCanView() ? appTile('po', '#/po/overview', 'audit', 'Purchase Order', 'Raise, sign and track purchase orders to OEMs and suppliers.', '<span class="t-meta" id="poMeta">Open</span>', true) : lockedTile('audit', 'Purchase Order', 'Raise, sign and track purchase orders to OEMs and suppliers.')],
+      ['proforma', appTile('proforma', null, 'chart', 'Proforma Invoice &amp; Quote', 'Prepare quotes and proforma invoices for clients.', '<span class="t-meta">Coming later</span>')]])}
     </section>
     <footer class="l-foot">${esc(CFG.COMPANY || '')} · ${esc(CFG.MOTTO || '')}<br><span>${esc(CFG.APP_NAME)} v${esc(CFG.VERSION || '')} · <span class="credit">${esc(CREDIT)}</span></span></footer></div>`;
   $('#bell').onclick = openBell; bindMeBtn();
@@ -783,3 +792,35 @@ async function renderLauncher() {
     if (e.key.length === 1) buf += e.key;
   });
 })();
+
+// ---------------------------------------------------------------- 3.0.7: every download goes into the audit log (who, which file, from which page)
+function nestLogDownload(name) {
+  if (!S.session || !name) return;
+  const k = name + '|' + Math.floor(Date.now() / 4000); if (nestLogDownload.last === k) return; nestLogDownload.last = k;
+  try { sb.rpc('log_export', { p_file: String(name).slice(0, 200), p_page: location.hash.slice(0, 120) }).then(() => { }, () => { }); } catch (e) { /* never block a download */ }
+}
+(() => {
+  const isDl = a => a && a.hasAttribute && a.hasAttribute('download');
+  const click = HTMLAnchorElement.prototype.click;
+  HTMLAnchorElement.prototype.click = function () { if (isDl(this)) nestLogDownload(this.download || this.getAttribute('download')); return click.apply(this, arguments); };
+  // the PDF library starts its downloads with a click event rather than .click()
+  HTMLAnchorElement.prototype.dispatchEvent = function (ev) { if (ev && ev.type === 'click' && isDl(this)) nestLogDownload(this.download || this.getAttribute('download')); return EventTarget.prototype.dispatchEvent.call(this, ev); };
+})();
+// a progress overlay for downloads that take a moment; fn(set) can call set(done, total) to show how far it has got
+async function withProgress(text, fn) {
+  const el = document.createElement('div'); el.className = 'dl-prog';
+  el.innerHTML = `<div role="status" aria-live="polite"><b>${esc(text)}</b><div class="bar ind"><i></i></div><small>Keep this page open.</small></div>`;
+  document.body.appendChild(el);
+  const set = (n, t) => { const b = $('.bar', el); b.classList.remove('ind'); $('i', b).style.width = Math.round(n / Math.max(t, 1) * 100) + '%'; $('small', el).textContent = `${n} of ${t} done · keep this page open`; };
+  try { await new Promise(r => setTimeout(r, 40)); return await fn(set); } finally { el.remove(); }
+}
+
+// 3.0.7: one panel that opens and closes on its own (starts closed), e.g. "Items bought most" on the PO overview
+function foldPanel(x, key) {
+  const h = x && x.querySelector(':scope > header'); if (!h || x.dataset.fold) return; x.dataset.fold = 1;
+  S.fold = S.fold || {}; x.classList.add('acc'); x.classList.toggle('open', !!S.fold[key]);
+  h.tabIndex = 0; h.setAttribute('role', 'button'); h.setAttribute('aria-expanded', !!S.fold[key]); h.insertAdjacentHTML('beforeend', '<span class="acc-chev" aria-hidden="true"></span>');
+  const t = () => { S.fold[key] = !S.fold[key]; x.classList.toggle('open', S.fold[key]); h.setAttribute('aria-expanded', S.fold[key]); };
+  h.addEventListener('click', e => { if (!e.target.closest('button, a, input, select, textarea, label')) t(); });
+  h.addEventListener('keydown', e => { if ((e.key === 'Enter' || e.key === ' ') && e.target === h) { e.preventDefault(); t(); } });
+}

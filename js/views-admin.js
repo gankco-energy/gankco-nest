@@ -294,7 +294,7 @@ ROUTES.team = {
           ${rows.length ? `<div class="tablewrap"><table class="t stack"><thead><tr><th>Service line</th><th>Staff</th><th>Receive PO deliveries</th></tr></thead><tbody>
           ${rows.map(({ d, m, p }) => `<tr><td>${esc(d.short_name || d.name)}</td><td class="name">${esc(p.full_name || p.email)}</td><td><label class="switch mini"><input type="checkbox" data-porecv="${p.id}" data-dept="${d.id}" ${m.po_receive ? 'checked' : ''}><span class="sw"></span><span class="sub">${m.po_receive ? 'Yes' : 'No'}</span></label></td></tr>`).join('')}</tbody></table></div>` : '<div class="body"><span class="sub">No staff in service lines yet.</span></div>'}</section>`;
       })()}
-      <section class="panel"><div class="body"><b>What each role can do</b>
+      <section class="panel"><header><h2>What each role can do</h2><span class="meta">Inventory, Purchase Order, PFI & Quote, PeopleCore</span></header><div class="body">
         <p class="muted">Each app has its own roles. Being an admin in one app gives nothing in another.</p>
         <dl class="kv mt">
         <dt>Inventory · Admin</dt><dd>Manages items, stock, locations, labels and Inventory settings in every line. Approves requests, stock changes and counts only for the lines where you’ve made them main or backup admin. Can switch to <b>My view</b> to work as staff do.</dd>
@@ -307,6 +307,7 @@ ROUTES.team = {
         <dt>Developer</dt><dd>Everything, in every app. One Developer, with an optional backup. Hand it over with <b>Transfer Developer</b>.</dd></dl></div></section>`;
   },
   bind(main) {
+    settingsAccordion(main, 'team');
     if (!isSuper()) return;
     const editLines = (pid, approveAfter) => {
       const p = S.people[pid]; const cur = accessOf(pid);
@@ -387,8 +388,8 @@ function devTransfer() {
 // ================================================================ AUDIT LOG
 const AUDIT_TABLES = { po_orders: 'Purchase orders', po_receipts: 'PO deliveries received', po_suppliers: 'Suppliers', stock: 'Stock movements', items: 'Items', units: 'Serials & kit numbers', unit_components: 'Kit component expiry', kit_components: 'Kit components', certifications: 'Certificates',
   locations: 'Locations', departments: 'Service lines', categories: 'Categories', profiles: 'People & access', memberships: 'Team membership', jobs: 'Materials requests', job_lines: 'Materials request lines', job_sections: 'Request approvals by line',
-  change_batches: 'Requests & approvals', counts: 'Monthly counts', app_settings: 'Settings', report_signoffs: 'Report sign-offs', sign_events: 'Signatures on documents', documents: 'Signed downloads', signatures: 'Signature uploads', plan_jobs: 'Job planner', item_prices: 'Prices' };
-const AUDIT_NOUN = { po_orders: 'Purchase order', po_receipts: 'PO delivery', po_suppliers: 'Supplier', po_service_lines: 'Service line', inv_subtypes: 'Sub-type', items: 'Item', units: 'Serial / kit number', unit_components: 'Kit component expiry', kit_components: 'Kit component', certifications: 'Certificate', locations: 'Location', departments: 'Team', categories: 'Category', profiles: 'Person', memberships: 'Service-line membership', jobs: 'Materials request', job_lines: 'Materials request line', job_sections: 'Materials request line approval', change_batches: 'Request', counts: 'Monthly count', app_settings: 'Setting', report_signoffs: 'Report sign-off', sign_events: 'Document', documents: 'Document', signatures: 'Signature', plan_jobs: 'Planned job', item_prices: 'Price' };
+  change_batches: 'Requests & approvals', counts: 'Monthly counts', app_settings: 'Settings', report_signoffs: 'Report sign-offs', exports: 'Downloads', sign_events: 'Signatures on documents', documents: 'Signed downloads', signatures: 'Signature uploads', plan_jobs: 'Job planner', item_prices: 'Prices' };
+const AUDIT_NOUN = { exports: 'File', po_orders: 'Purchase order', po_receipts: 'PO delivery', po_suppliers: 'Supplier', po_service_lines: 'Service line', inv_subtypes: 'Sub-type', items: 'Item', units: 'Serial / kit number', unit_components: 'Kit component expiry', kit_components: 'Kit component', certifications: 'Certificate', locations: 'Location', departments: 'Team', categories: 'Category', profiles: 'Person', memberships: 'Service-line membership', jobs: 'Materials request', job_lines: 'Materials request line', job_sections: 'Materials request line approval', change_batches: 'Request', counts: 'Monthly count', app_settings: 'Setting', report_signoffs: 'Report sign-off', sign_events: 'Document', documents: 'Document', signatures: 'Signature', plan_jobs: 'Planned job', item_prices: 'Price' };
 const FIELD_LABEL = { sub_line_id: 'Sub service line', subtype_id: 'Sub-type', for_po: 'Used on POs', parent_id: 'Service line', profile_id: 'Person', name: 'Description', code: 'Item code', min_qty: 'Reorder at', max_qty: 'Restock up to', item_type: 'Type', unit: 'Unit', supplier: 'Supplier', notes: 'Notes', active: 'Active', role: 'Access',
   state: 'Status', department_id: 'Team', category_id: 'Category', is_kit: 'Redress kit', serial_no: 'Serial / kit no.', lot_no: 'Lot', expiry_on: 'Expiry', due_on: 'Due', cert_no: 'Certificate no.',
   title: 'Job', status: 'Status', requester_name: 'Requester', requester_id: 'Requester', main_admin: 'Main admin', backup_admin: 'Backup admin', full_name: 'Name', value: 'Value', qty: 'Qty', location_id: 'Location', decision_note: 'Note', kind: 'Type', superseded: 'Superseded', job_title: 'Job title', signature_id: 'Signature', step: 'Step', document: 'Document', signature: 'Signature', removed_at: 'Removed', return_note: 'Return note', period_label: 'Period', ref: 'Ref', received_by_name: 'Receipt confirmed by', received_at: 'Receipt confirmed' };
@@ -417,7 +418,7 @@ ROUTES.audit = {
       const data = r.new_data || r.old_data || {};
       const itemId = r.table_name === 'items' ? +r.record_id : data.item_id;
       const subject = r.summary || (itemId && its.get(+itemId)?.name) || (r.table_name === 'memberships' ? `${personName(data.profile_id, '')} · ${lineShort(data.department_id)}` : '') || `#${r.record_id}`;
-      const verb = { insert: 'added', update: 'changed', delete: 'removed', signed: 'signed' }[r.action] || r.action;
+      const verb = { insert: 'added', update: 'changed', delete: 'removed', signed: 'signed', downloaded: 'downloaded' }[r.action] || r.action;
       const dev = r.action === 'developer remove' || r.action === 'developer transfer';
       return { fresh: AUD.fresh?.has(r.id), at: r.at, who: r.user_name, line: r.department_id, what: dev ? (r.action === 'developer transfer' ? 'Developer handed over' : 'Developer tools') : `${AUDIT_NOUN[r.table_name] || r.table_name} ${verb}`, subject, changes, link: itemId ? `#/item/${itemId}` : r.table_name === 'report_signoffs' ? `#/signoff/${r.record_id}` : r.table_name === 'jobs' ? `#/job/${r.record_id}` : (r.table_name === 'job_sections' || r.table_name === 'job_lines') && data.job_id ? `#/job/${data.job_id}` : '',
         detail: r.action === 'developer remove' ? 'A full copy of what was removed is kept in this audit record.' : r.action !== 'update' ? Object.entries(data).filter(([k, v]) => !AUDIT_SKIP.includes(k) && v !== null && v !== '').slice(0, 6).map(([k, v]) => `${FIELD_LABEL[k] || k}: ${auditVal(k, v)}`).join(' · ') : '' };
@@ -636,7 +637,7 @@ ROUTES.labels = {
 ROUTES.account = {
   async load() {
     const p = S.profile;
-    return topbar('My account') + `<div class="cols"><section class="panel"><header><h2>Profile</h2></header><form class="body" id="prof">
+    return topbar('My account') + `<div><section class="panel"><header><h2>Profile</h2></header><form class="body" id="prof">
         <div class="setup-photo"><span class="setup-av" id="acc-av">${p.photo ? `<img src="${esc(p.photo)}" alt="">` : `<b>${esc(((p.first_name || p.full_name || p.email || '?')[0] || '?').toUpperCase())}</b>`}</span>
           <div><b>Your photo</b><div class="sub">Shows in Nest and PeopleCore.</div><label class="btn small filebtn mt">${ico('up')}${p.photo ? 'Change photo' : 'Add a photo'}<input type="file" accept="image/*" id="acc-ph" hidden></label></div></div>
         ${p.hr_linked ? `<dl class="kv"><dt>Name</dt><dd>${esc(p.full_name || '')}</dd><dt>Phone</dt><dd>${esc(p.phone || '—')}</dd></dl>
@@ -659,6 +660,7 @@ ROUTES.account = {
       <button class="btn" id="out">Sign out</button>`;
   },
   bind(main) {
+    settingsAccordion(main, 'account');
     bindMyAlerts(main);
     const reload = async () => { S.profile = await q(sb.from('profiles').select('*').eq('id', S.profile.id).maybeSingle()); await loadLookups(); S.shellReady = false; render({ quiet: true }); };
     $('#acc-ph', main).onchange = async e => { try { const ph = await hrPhotoData(e.target.files[0]); await q(sb.rpc('my_profile_save', { p: { photo: ph } })); toast('Photo saved'); if (typeof pcInvalidate === 'function') pcInvalidate(); await reload(); } catch (ex) { toast(niceError(ex), true); } };

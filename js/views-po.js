@@ -1138,6 +1138,7 @@ const poOverview = {
       : '<div class="body muted">No lines yet in this period. Old POs added with their lines also count here.</div>'}</section>`;
   },
   bind(main) {
+    $$('section.panel', main).forEach(x => { if (/Items bought most/.test(x.querySelector(':scope > header h2')?.textContent || '')) foldPanel(x, 'po-items'); });
     $$('#ov-cur button', main).forEach(b => b.onclick = () => { this.P.cur = b.dataset.c; render({ quiet: true }); });
     $('#ov-year', main).onchange = e => { this.P.year = e.target.value; render({ quiet: true }); };
   }

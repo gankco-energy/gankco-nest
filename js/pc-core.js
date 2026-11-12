@@ -95,7 +95,7 @@ function peopleNav() {
   const inWork = /^people\/work/.test(S.hr.navKey || '') && !S.pc.workShut;
   const main = [['people', 'Discover', 'compass'], ['people/me', 'My profile', 'user'], ['people/work', 'Work', 'kit'],
     ...(inWork ? HR_WORK.map(([k, l]) => ['people/work/' + k, l, null]) : []),
-    ['people/pay', 'Pay', 'pay'], ['people/approvals', 'Approvals', 'check'], ['people/company', 'Company', 'building']];
+    ['people/pay', 'Pay', 'pay'], ['people/approvals', 'Approvals', 'check'], ...(S.pc.repShared ? [['people/reports', 'Reports', 'chart']] : []), ['people/company', 'Company', 'building']];
   return { top, main, setup: [], setupLabel: 'Nest' };
 }
 function peopleBottomBar() {
@@ -109,7 +109,7 @@ function peopleBottomBar() {
 }
 function peopleReshell(navKey) {
   S.hr.navKey = navKey;
-  const sig = [S.pc.view, S.pc.mod, pcViews().map(v => v[0]).join(','), S.hr.appr.length, /^people\/work/.test(navKey), !!S.pc.workShut, S.viewAs?.role || ''].join('|');
+  const sig = [S.pc.view, S.pc.mod, pcViews().map(v => v[0]).join(','), S.hr.appr.length, /^people\/work/.test(navKey), !!S.pc.workShut, S.viewAs?.role || '', S.pc.repShared || 0].join('|');
   if (sig === S.hr.navSig) return;
   S.hr.navSig = sig; S.shellReady = false; shell(); setNav(navKey);
   const a = $(`.nav [data-r="people/approvals"]`) || $(`.nav [data-r="people/sup/approvals"]`);
@@ -128,7 +128,7 @@ function pcPhoneNav() {
 ROUTES.people = {
   async load(parts, params) { const html = await this.load2(parts, params); return pcPhoneNav() + html; },
   async load2(parts, params) {
-    await Promise.all([hrLookups(), pcAccess(), pcLookups()]);
+    await Promise.all([hrLookups(), pcAccess(), pcLookups(), typeof rpSharedCount === 'function' ? rpSharedCount() : 0]);
     const a = parts[1] || '';
     // 3.0 HR pages moved into the Admin view
     const moved = { staff: '#/people/admin/hris/employees', settings: '#/people/admin/hris/settings', time: '#/people/admin/leave', engage: '#/people/admin/ann', team: '#/people/sup/team' };

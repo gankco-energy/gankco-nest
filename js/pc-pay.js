@@ -1,6 +1,6 @@
 /* GANKCO Nest 3.0.6 — PeopleCore Payroll.
    Settings (allowances, paygrades, tax, change types, payslips, company), pay records, the monthly run
-   (changes gathered from Requisition, Leave, Promotions and loans; calculation with workings; close; payslips by email),
+   (changes gathered from Requisition, Leave, Promotions and loans; calculation with workings; close; payslips sent to staff when HR chooses, viewed and downloaded in Nest),
    downloads (bank, PAYE, pension, statutory, full report), past payroll and comparison with SeamlessHR. Self service: Pay. */
 'use strict';
 
@@ -59,7 +59,8 @@ PY.pages[''] = { perms: PY.perms,
          <div><b>1 · Open the month</b><span>Nest adds overtime and expenses moved to payroll, leave allowances, loans and arrears by itself.</span></div>
          <div><b>2 · Add other changes</b><span>Bonuses, deductions and one-offs, one by one or from a file.</span></div>
          <div><b>3 · Calculate</b><span>Everyone’s pay, pension and tax, with the workings. “Needs a look” lists missing bank or pension details.</span></div>
-         <div><b>4 · Close</b><span>Payslips are emailed and appear under Pay. Download the bank, PAYE and pension schedules.</span></div></div></section></div>`;
+         <div><b>4 · Close</b><span>Locks the month. Download the bank, PAYE and pension schedules. Staff don’t see anything yet.</span></div>
+         <div><b>5 · Send payslips to staff</b><span>When you’re ready. Each person gets an email with a View payslip button and a Nest notification, then views and downloads it under Pay.</span></div></div></section></div>`;
   },
   bind(main) { pyEyeBind(main); const b = $('#pynew', main); if (b) b.onclick = () => pyNewRun('regular'); }
 };
@@ -81,7 +82,8 @@ PY.pages.run = { perms: ['view-payroll', 'run-payroll'],
     return topbar('Run payroll', 'Every payroll, newest first. Past records are months uploaded from SeamlessHR.', pyEyeBtn() + (pcCan('run-payroll') ? `<button class="btn" id="pyextra">${ico('plus')}Extra run</button>` +
         (open ? `<a class="btn primary" href="#/people/admin/pay/run/${open.id}">Continue ${esc(open.title)}</a>` : `<button class="btn primary" id="pynew">${ico('pay')}Run payroll</button>`) : '')) +
       pcTable('pyruns', [{ l: 'Payroll', v: r => r.period, f: r => `<b>${esc(r.title)}</b>${r.kind !== 'regular' ? ' ' + pcChip('muted', PY_KIND[r.kind]) : ''}` },
-        { l: 'Status', v: r => r.status, f: r => pcChip(...PY_ST[r.status]) + (r.reopened_at && r.status !== 'closed' ? ' ' + pcChip('pending', 'Reopened') : ''), csv: r => PY_ST[r.status][1] },
+        { l: 'Status', v: r => r.status, f: r => pcChip(...PY_ST[r.status]) + (r.reopened_at && r.status !== 'closed' ? ' ' + pcChip('pending', 'Reopened') : '') + (r.status === 'closed' && r.kind !== 'past' ? ' ' + (r.released_at ? pcChip('ok', 'Payslips sent') : pcChip('pending', 'Payslips not sent')) : ''),
+          csv: r => PY_ST[r.status][1] + (r.status === 'closed' && r.kind !== 'past' ? (r.released_at ? ', payslips sent' : ', payslips not sent') : '') },
         { l: 'People', cls: 'num', v: r => +r.people }, { l: 'Gross', cls: 'num', v: r => +r.gross, f: r => pyHid(r.gross), csv: r => r.gross }, { l: 'Tax', cls: 'num', v: r => +r.tax, f: r => pyHid(r.tax), csv: r => r.tax },
         { l: 'Net', cls: 'num', v: r => +r.net, f: r => pyHid(r.net), csv: r => r.net },
         { l: 'Closed', v: r => r.closed_at || '', f: r => r.closed_at ? `${fd(r.closed_at)}<br><small class="muted">${esc(r.closed_by || '')}</small>` : (r.warnings ? pcChip('pending', `${r.warnings} need a look`) : '—') }], rows,
@@ -99,14 +101,15 @@ async function pyRunPage(id) {
   const acts = [
     can && !closed ? `<button class="btn" data-py="gather" title="Look again for overtime, leave allowance, loans and arrears">${ico('undo')}Refresh changes</button>` : '',
     can && !closed ? `<button class="btn primary" data-py="calc">${ico('check')}${L.length ? 'Recalculate' : 'Calculate'}</button>` : '',
-    can && r.status === 'calculated' ? `<button class="btn primary" data-py="close">${ico('lock')}Close and send payslips</button>` : '',
+    can && r.status === 'calculated' ? `<button class="btn primary" data-py="close">${ico('lock')}Close payroll</button>` : '',
+    closed && can && !r.released_at ? `<button class="btn primary" data-py="send">${ico('send')}${r.reopened_at ? 'Send revised payslips to staff' : 'Send payslips to staff'}</button>` : '',
     closed && can && pcCan('reopen-payroll') ? `<button class="btn" data-py="reopen">${ico('undo')}Reopen</button>` : '',
-    closed && can ? `<button class="btn" data-py="send">${ico('chat')}${r.emailed_at ? 'Send payslips again' : 'Send payslips'}</button>` : '',
     L.length ? `<button class="btn" data-py="compare">${ico('audit')}Compare with SeamlessHR</button>` : '',
     (can && !closed) || (r.kind === 'past' && pcCan('upload-payroll-history')) ? `<button class="btn danger-ghost" data-py="delete">${ico('trash')}Delete</button>` : ''].join('');
-  const steps = [['Open the month', true], ['Changes', d.changes.length > 0 || r.status !== 'open'], ['Calculate', r.status !== 'open'], ['Close', closed], ['Payslips sent', !!r.emailed_at]];
+  const steps = [['Open the month', true], ['Changes', d.changes.length > 0 || r.status !== 'open'], ['Calculate', r.status !== 'open'], ['Close', closed], ['Payslips sent', !!r.released_at || r.kind === 'past']];
   const head = topbar(r.title, `${PY_KIND[r.kind]} payroll · opened by ${esc(r.created_by_name || '')} ${fd(r.created_at)}${r.closed_at ? ` · closed by ${esc(r.closed_by_name || '')} ${fd(r.closed_at)}` : ''}`, pyEyeBtn() + `<a class="btn" href="#/people/admin/pay/run">Back</a>`) +
-    `<section class="panel py-head"><div class="body"><div class="hr-chips">${pcChip(...PY_ST[r.status])}${r.reopened_at ? pcChip('pending', 'Reopened: ' + (r.note || '')) : ''}${stale ? pcChip('pending', 'Changed since the last calculation') : ''}</div>
+    `<section class="panel py-head"><div class="body"><div class="hr-chips">${pcChip(...PY_ST[r.status])}${r.reopened_at ? pcChip('pending', 'Reopened: ' + (r.note || '')) : ''}${stale ? pcChip('pending', 'Changed since the last calculation') : ''}${closed && r.kind !== 'past' ? (r.released_at ? pcChip('ok', `Payslips sent ${fd(r.released_at)}${r.released_by_name ? ' by ' + esc(r.released_by_name) : ''}`) : pcChip('pending', 'Payslips not sent yet')) : ''}</div>
+      ${closed && can && !r.released_at ? `<div class="notice">Staff can’t see these payslips yet. Press <b>${r.reopened_at ? 'Send revised payslips to staff' : 'Send payslips to staff'}</b> when you’re ready: each person is told by email and in Nest, then views and downloads it under Pay.</div>` : ''}
       <ol class="pa-steps">${steps.map(([l, done], i) => `<li class="${done ? 'done' : steps.findIndex(s => !s[1]) === i ? 'on' : ''}"><span>${done ? '✓' : i + 1}</span>${l}</li>`).join('')}</ol>
       <div class="pf-acts">${acts}</div></div></section>`;
   const kp = pcKpis([[L.length, 'People'], [pyHid(sum('gross')), 'Gross pay'], [pyHid(sum('pension_ee') + sum('pension_er')), 'Pension (staff + company)'], [pyHid(sum('tax')), 'PAYE and WHT'],
@@ -155,7 +158,7 @@ function pyRunBind(main, id) {
     if (a === 'upchg') return pyChangeUpload(id);
     if (a === 'close') return pyClose(id);
     if (a === 'send') return pySendPayslips(id);
-    if (a === 'reopen') return pcEdit({ title: 'Reopen ' + r().title, wide: false, submit: 'Reopen', danger: true, sub: 'What closing marked as paid goes back (overtime, leave allowance, loans). When it’s closed again, staff get a revised payslip.',
+    if (a === 'reopen') return pcEdit({ title: 'Reopen ' + r().title, wide: false, submit: 'Reopen', danger: true, sub: 'What closing marked as paid goes back (overtime, leave allowance, loans). Staff can’t see this payslip until you close it and send again; they then get a revised payslip.',
       fields: [{ k: 'reason', l: 'Why', t: 'textarea', req: true }], save: async v => { await q(sb.rpc('hr_pay_run_reopen', { p_run: id, p_reason: v.reason })); toast('Reopened'); render({ quiet: true }); } });
     if (a === 'delete') { if (!await pcConfirm('Delete ' + esc(r().title) + '?', 'Its changes and calculation are removed. Overtime, leave allowance and loans in it stay waiting for the next payroll.', 'Delete')) return;
       await pcTry(() => q(sb.rpc('hr_pay_run_delete', { p_run: id })), 'Deleted'); return go('#/people/admin/pay/run'); }
@@ -198,34 +201,38 @@ function pyWorkings(l, r) {
       <div><div class="pc-sec">How it was worked out</div><ol class="py-steps">${w}</ol></div></div>` });
 }
 
-// close, then email payslips
+// close (staff see nothing yet); HR sends payslips when they choose
 async function pyClose(id) {
-  const d = S.pc.pyRun; const warn = d.lines.filter(l => (l.warnings || []).length).length; const cfg = pyCfg();
+  const d = S.pc.pyRun; const warn = d.lines.filter(l => (l.warnings || []).length).length;
   if (!await modal({ title: 'Close ' + d.run.title + '?', submit: 'Close payroll', body: `<p>${plural(d.lines.length, 'person', 'people')} · net pay ${pyM(d.lines.reduce((a, l) => a + +l.net, 0))}.</p>
       ${warn ? `<div class="notice warn">${plural(warn, 'person', 'people')} still need a look. You can close anyway.</div>` : ''}
-      <p class="muted">Closing locks it, marks overtime, expenses, leave allowance and loan instalments in it as paid, and makes payslips available under Pay.${cfg.email_payslips !== false ? ' Payslips are then emailed.' : ''}</p>`,
+      <p class="muted">Closing locks it and marks overtime, expenses, leave allowance and loan instalments in it as paid. Staff won’t see their payslips until you press <b>Send payslips to staff</b>, which you can do now or later.</p>`,
     onSubmit: async () => true })) return;
-  try { await q(sb.rpc('hr_pay_run_close', { p_run: id })); toast('Payroll closed'); } catch (e) { return toast(niceError(e), true); }
-  if (cfg.email_payslips !== false) await pySendPayslips(id);
+  try { await q(sb.rpc('hr_pay_run_close', { p_run: id })); toast('Payroll closed. Send payslips to staff when you’re ready.'); } catch (e) { return toast(niceError(e), true); }
   render({ quiet: true });
 }
 async function pySendPayslips(id) {
-  const d = await q(sb.rpc('hr_pay_run_get', { p_run: id })); const L = d.lines;
-  const dlg = document.createElement('dialog'); dlg.className = 'modal'; dlg.innerHTML = `<div class="mh"><h2>Sending payslips</h2><p>Each payslip is made here and emailed as a PDF. Keep this page open.</p></div>
-    <div class="mb"><div class="py-prog"><i style="width:0%"></i></div><p id="pyps">0 of ${L.length}</p></div><div class="mf"><button class="btn" data-x disabled>Close</button></div>`;
-  document.body.appendChild(dlg); dlg.showModal();
-  let ok = 0, none = 0, bad = []; const tpl = pyCfg().payslips?.default || 'full';
-  for (let i = 0; i < L.length; i++) {
-    try { const b64 = await pyPayslipPdf(L[i], d.run, { output: 'base64', tpl, ytd: L[i].ytd });
-      const res = await q(sb.rpc('hr_pay_payslip_send', { p_run: id, p_emp: L[i].employee_id, p_pdf: b64 })); if (res === 'sent') ok++; else none++;
-    } catch (e) { bad.push(L[i].name + ': ' + niceError(e)); }
-    $('.py-prog i', dlg).style.width = Math.round((i + 1) / L.length * 100) + '%'; $('#pyps', dlg).textContent = `${i + 1} of ${L.length}`;
-  }
-  $('#pyps', dlg).innerHTML = `${plural(ok, 'payslip')} emailed${none ? ` · ${none} with no email address` : ''}${bad.length ? `<br><span class="neg">${bad.map(esc).join('<br>')}</span>` : ''}`;
-  const c = $('[data-x]', dlg); c.disabled = false; c.onclick = () => { dlg.close(); dlg.remove(); render({ quiet: true }); };
+  let c; try { c = await q(sb.rpc('hr_pay_release_check', { p_run: id })); } catch (e) { return toast(niceError(e), true); }
+  const t = S.pc.pyRun?.run?.title || 'this payroll'; const ne = c.no_email || [];
+  const ok = await modal({ title: c.revised ? 'Send revised payslips?' : 'Send payslips to staff?', submit: c.building ? 'Send anyway' : (c.revised ? 'Send revised payslips' : 'Send payslips'),
+    body: `${c.building ? `<div class="notice warn"><b>PeopleCore isn’t open to staff yet.</b> It’s still under construction, so most people can’t open Pay to see their payslip. Until go-live, payslips should keep coming from SeamlessHR.</div>` : ''}
+      <p><b>${plural(c.people, 'person', 'people')}</b> will be told their ${c.revised ? 'revised ' : ''}payslip for ${esc(t)} is ready.</p>
+      <ul class="py-send-list">
+        <li>${c.email_on ? 'An email from nest-alerts with a <b>View payslip</b> button. The payslip isn’t attached.' : 'No email: payslip emails are off in Payroll settings.'}</li>
+        <li>A notification in Nest.</li>
+        <li>They view and download it in PeopleCore under Pay.</li></ul>
+      ${c.email_on && ne.length ? `<div class="notice warn">${plural(ne.length, 'person has', 'people have')} no email address, so they’ll only see it in Nest: ${ne.map(esc).join(', ')}.</div>` : ''}
+      ${c.no_account ? `<p class="muted">${plural(c.no_account, 'person doesn’t', 'people don’t')} have a Nest account yet. They’ll see it once they sign up with their work email.</p>` : ''}
+      <p class="muted">This can’t be undone. To correct a payslip later, reopen the payroll, fix it, close it and send again.</p>`,
+    onSubmit: async () => true });
+  if (!ok) return;
+  try { const res = await q(sb.rpc('hr_pay_release', { p_run: id }));
+    toast(`Payslips sent to ${plural(res.people, 'person', 'people')}${c.email_on ? ` · ${plural(res.emailed, 'email')}` : ''}`);
+  } catch (e) { return toast(niceError(e), true); }
+  render({ quiet: true });
 }
 
-// ================================================================ the payslip PDF (built in the browser, for email and download)
+// ================================================================ the payslip PDF (built in the browser when someone downloads it)
 // company details printed on payslips (HR can change them in Payroll → Settings → Company)
 const PY_CO_DEF = { name: 'GANKCO Energy Services Limited', email: 'info@gankcoenergy.com', website: 'www.gankcoenergy.com', country: 'Nigeria',
   address: 'Corporate Headquarters: Suite FF03, Hatlab Place, Plot 1952, Sokode Crescent, Wuse Zone 5, Abuja. Operational Base: No. 17, Market Lane, Rumuomasi, Off Stadium Road, Port Harcourt, Rivers State, Nigeria.' };
@@ -389,7 +396,8 @@ async function pyPayslipPdf(l, run, o = {}) {
 async function pyDownload(kind, d) {
   const r = d.run; const L = d.lines; const base = `${r.title}`; const cfg = pyCfg();
   const unit = id => hrUnit(id)?.name || '';
-  if (kind === 'payslips') { let doc = null; for (const l of L) doc = await pyPayslipPdf(l, r, { output: 'doc', doc, ytd: l.ytd }); return doc && doc.save(`Payslips ${r.period.slice(0, 7)}.pdf`); }
+  if (kind === 'payslips') return withProgress(`Making ${plural(L.length, 'payslip')}…`, async set => { let doc = null; for (let i = 0; i < L.length; i++) { doc = await pyPayslipPdf(L[i], r, { output: 'doc', doc, ytd: L[i].ytd }); set(i + 1, L.length); }
+    return doc && doc.save(`Payslips ${r.period.slice(0, 7)}.pdf`); });
   if (kind === 'bank') return pcXlsx(`Bank schedule ${base}.xlsx`, [{ k: 'emp_no', l: 'Staff ID', w: 13 }, { k: 'name', l: 'Name', w: 28 }, { k: 'bank', l: 'Bank', w: 22 }, { k: 'account_no', l: 'Account number', w: 16 },
       { k: 'account_name', l: 'Account name', w: 28 }, { k: 'sort_code', l: 'Sort code', w: 12 }, { k: 'net', l: 'Amount (NGN)', w: 16 }, { k: 'narration', l: 'Narration', w: 24 }],
     L.filter(l => +l.net > 0).map(l => ({ emp_no: l.emp_no, name: l.name, bank: l.bank?.bank || '', account_no: l.bank?.account_no || '', account_name: l.bank?.account_name || l.name, sort_code: l.bank?.sort_code || '',
@@ -616,7 +624,7 @@ PY.pages.settings = { perms: ['manage-payroll-settings'],
           <div><div class="pc-sec">Shows</div>${SH.map(([s, l]) => `<label class="check"><input type="checkbox" name="${k}_s_${s}" ${P[k]?.show?.[s] ?? ['words', 'employer'].includes(s) ? 'checked' : ''}> ${l}</label>`).join('')}</div>
           <div><div class="pc-sec">Company details (name and logo always show)</div>${CO.map(([s, l]) => `<label class="check"><input type="checkbox" name="${k}_c_${s}" ${(P[k]?.company || []).includes(s) ? 'checked' : ''}> ${l}</label>`).join('')}
           <div class="pc-sec">Employee details (name and employee code always show)</div>${EF.map(([s, l]) => `<label class="check"><input type="checkbox" name="${k}_e_${s}" ${(P[k]?.employee || []).includes(s) ? 'checked' : ''}> ${l}</label>`).join('')}</div></div></section>`).join('')}
-        <label class="switch pc-sw"><input type="checkbox" name="email_payslips" ${cfg.email_payslips !== false ? 'checked' : ''}><span class="sw"></span><span><b>Email payslips when a payroll closes</b><span class="sub muted">Staff can always download them under Pay.</span></span></label>
+        <label class="switch pc-sw"><input type="checkbox" name="email_payslips" ${cfg.email_payslips !== false ? 'checked' : ''}><span class="sw"></span><span><b>Email staff when you send payslips</b><span class="sub muted">A short email from nest-alerts with a View payslip button. The payslip itself is never attached: staff view and download it in Nest under Pay.</span></span></label>
         <p><button class="btn primary">Save</button></p></form>`;
     }
     if (tab === 'company') {
@@ -633,6 +641,7 @@ PY.pages.settings = { perms: ['manage-payroll-settings'],
     return head;
   },
   bind(main) {
+    settingsAccordion(main, 'pay-' + this.tab);
     const t = this.tab; const done = msg => { toast(msg || 'Saved'); pyInvalidate(); pcRefresh(); };
     main.addEventListener('click', async e => {
       const it = e.target.closest('[data-item]'); if (it) return pyItemForm(it.dataset.item);
@@ -728,7 +737,7 @@ PC_SELF.pay = {
       (rows.length ? pcKpis([[pyHid(rows[0].net), 'Last net pay · ' + rows[0].title], [pyHid(y?.gross), `Gross in ${yr}`], [pyHid(y?.tax), `Tax in ${yr}`], [pyHid(y?.pension), `Pension in ${yr}`]]) : '') +
       `<section class="panel"><header><h2>Payslips</h2><span class="meta">${plural(rows.length, 'payslip')}</span></header>${rows.length ? `<ul class="list py-mine">${rows.map((r, i) => `<li><div class="main"><div class="name">${esc(r.title)}${r.revised ? ' ' + pcChip('pending', 'Revised') : ''}${r.past ? ' ' + pcChip('muted', 'Past record') : ''}</div>
           <div class="sub">Gross ${pyHid(r.gross)} · tax ${pyHid(r.tax)} · net <b>${pyHid(r.net)}</b>${r.bank_name ? ` · to ${esc(r.bank_name)} ····${esc(r.account_no)}` : ''}</div></div>
-          <button class="btn small" data-ps="${i}">${ico('down')}Download</button></li>`).join('')}</ul>` : '<div class="pc-empty">Your payslips appear here once a payroll is closed.</div>'}</section>
+          <button class="btn small" data-ps="${i}">${ico('down')}Download</button></li>`).join('')}</ul>` : '<div class="pc-empty">Your payslips appear here once HR sends them. You’ll get an email and a notification.</div>'}</section>
       <section class="panel"><header><h2>Rent relief</h2></header><div class="body">
         <p class="muted">Since January 2026, ${cfg.rent_pct ?? 20}% of the rent you pay for your home (up to ${pyM(cfg.rent_cap ?? 500000)}) comes off your taxable income. Send your rent and the tenancy agreement or a receipt; HR checks it.</p>
         ${p.annual_rent ? `<p>Rent for the year: <b>${pyHid(p.annual_rent)}</b> ${pcChip(p.rent_status === 'approved' ? 'ok' : p.rent_status === 'pending' ? 'pending' : 'rejected', { approved: 'Approved', pending: 'With HR', declined: 'Not approved' }[p.rent_status] || '')}${p.rent_note ? ` <small class="muted">${esc(p.rent_note)}</small>` : ''}</p>` : ''}

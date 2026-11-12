@@ -289,7 +289,7 @@ function sigPickerBind(root, onErr) {
 const needsSetup = () => !!S.profile && S.profile.role !== 'disabled' && (!S.profile.photo || !S.profile.signature_id || !S.profile.first_name);
 const setupSkipped = () => { try { return sessionStorage.getItem('nest.setupSkip') === S.profile?.id; } catch (e) { return false; } };
 function renderSetup() {
-  S.shellReady = false; const p = S.profile; const pending = p.role === 'pending'; let photo = null;
+  S.shellReady = false; S.gate = 'setup'; const p = S.profile; const pending = p.role === 'pending'; let photo = null;
   authShell(`<form id="f" class="setup" novalidate>
     <div class="setup-steps"><span class="done">1 · Account</span><span class="on">2 · Your profile</span></div>
     <h1>Finish your profile</h1><p class="sub">${pending ? 'Your account is waiting for the Developer to approve it. While you wait, add your photo and signature.' : 'Add your photo and signature. Your signature goes on the documents you sign in Nest.'}</p>

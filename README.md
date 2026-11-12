@@ -1,4 +1,4 @@
-# GANKCO Nest: version 3.0.6 (PeopleCore: Payroll, and the new employee upload)
+# GANKCO Nest: version 3.0.7 (PeopleCore: Reports & Analytics, payslips HR sends when ready, and a record of every download)
 
 *Built to support engineered solutions.*
 
@@ -9,7 +9,39 @@
 - **Emails:** sent by Brevo from **nest-alerts@gankcoenergy.com** as "GANKCO Nest". Sign-in emails use Supabase's custom SMTP (templates in Supabase → Authentication → Emails → Templates). Alert emails use the Brevo API key saved in Supabase Vault as `brevo_api_key`, on a schedule (pg_cron).
 - **DNS (company IT):** `nest` CNAME → `gankco-energy.github.io`, plus the Brevo verification records.
 
-## Install 3.0.6 (about 5 minutes)
+## Install 3.0.7 (about 3 minutes)
+
+3.0.6 must already be installed.
+
+1. **Supabase → SQL Editor:** open a **New query**, paste the whole of **`23-nest-v3.0.7-upgrade.sql`**, press **Run**. It ends with **Nest 3.0.7 installed**. It is all-or-nothing and safe to run again.
+2. **GitHub:** unzip **`gankco-nest-v3.0.7.zip`** and upload everything into **github.com/gankco-energy/gankco-nest**, then commit. Keep the `CNAME` file.
+3. Reload Nest (**Ctrl + Shift + R**). Open tabs also show a **Reload** bar. The footer says **v3.0.7**.
+4. **Who gets Reports & Analytics:** HR Admin (and Super Admin) have it. To give it to anyone else, add the **Reports** permissions to their role in PeopleCore → System control → Roles.
+5. **Scheduled reports are off.** HR switches them on in *Reports & Analytics → Settings* when they want reports emailed.
+
+### What's new in 3.0.7
+- **Reports & Analytics** (PeopleCore → Admin → Reports & Analytics, HR admins only), modelled on SeamlessHR's:
+  - **Overview:** active staff, joined and left this year, on leave today; five staff charts (active vs inactive, length of service, gender, confirmed vs unconfirmed, generation) that can switch between donut, columns and bars, and show percentages.
+  - **Report library:** 76 ready-made reports in 12 modules: SeamlessHR's company, employee, leave, exit, performance, promotion, requisition and disciplinary reports, plus competency gaps, survey response rates, probation and confirmations due, and payroll summaries (payroll ones only for people with payroll permission). Default reports can't be changed: **Duplicate** one to make it your own.
+  - **Each report:** a chart and a table, filters (dates, department, location, pay group and more), click any number or bar to see the people behind it, and download as Excel, CSV or PDF.
+  - **Create report:** 1 choose a module and its starting data (and related data such as contract, line manager, next of kin, bank), 2 tick the properties, 3 build it: a list, or a summary grouped by one or two things with counts, totals or averages, filters and a chart. Save it to the library.
+  - **Dashboards:** each HR admin has their own, with charts and number cards.
+  - **Sharing:** HR can share a report with anyone (the MD, managers…). They see it under **PeopleCore → Reports**, read-only, with the latest figures, and can download it. Private details (bank, pay, IDs, contacts) stay hidden from anyone not allowed to see private staff data; HR chooses which fields count as private in Settings.
+  - **Scheduled reports** (off until HR switches them on): daily, weekly, monthly or yearly emails to chosen people. The email carries a link to the report in Nest, never the file. Pausing or deleting a schedule removes its recipients' access.
+  - **Audit trail:** who viewed, exported, created, changed, shared or emailed which report, and when.
+- **Payslips go out when HR says so** (Payroll → Run payroll):
+  - **Closing a payroll no longer shows anything to staff.** It locks the month and marks what it paid, so Finance can download the bank and remittance schedules. Staff see nothing yet: no payslip under Pay, no email, no notification.
+  - **Send payslips to staff:** a button on the closed payroll. HR presses it when ready, the same day or later. It confirms first (how many people, anyone without an email address, and a warning if PeopleCore isn't open to staff yet), then shows *Payslips sent [date] by [name]*. The payroll list shows *Payslips sent* or *Payslips not sent*.
+  - **Each person gets an email from nest-alerts:** "Your payslip for November 2026 is ready", with a **View payslip** button that opens Pay in Nest, plus a notification in Nest. **The payslip is never attached to an email.** Staff view and download it only in PeopleCore → Pay.
+  - **Corrections:** if HR reopens a payroll after sending, the payslip is taken back from staff until HR closes it and sends again. That email says "Your revised payslip … is ready".
+  - **Past months uploaded from SeamlessHR** show under Pay straight away, without any email.
+  - The email can be switched off in *Payroll → Settings* (staff then only get the Nest notification). Payrolls already emailed under 3.0.6 count as sent; any other closed payroll waits for HR to send it.
+- **Every download is recorded:** each Excel, CSV and PDF downloaded anywhere in Nest goes into the Audit log as *File downloaded*, with who, which file and from which page.
+- **Progress bars** on heavy downloads (all payslips in one PDF, long reports and lists).
+- **Sections that open and close:** Team & access, My account, Performance settings, Payroll settings and Report settings now show their sections as bars that start closed (like Nest settings). On the PO overview, *Items bought most* starts closed.
+- **The home screen arranges itself:** apps you can open come first, in the order PeopleCore, Inventory, Purchase Order, PFI & Quote; apps not open to you yet follow; an app under maintenance moves to the end and comes back when maintenance ends. When PeopleCore goes live it becomes the first tile on its own.
+
+## Install 3.0.6 (already done, for reference)
 
 3.0.5 and its update must already be installed.
 

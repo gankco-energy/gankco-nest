@@ -359,7 +359,13 @@ function drawSignatures(doc, signatures, y, imgs) {
    rows may carry _group (category heading) and _st:{dataKey: status} (for frozen reports)
    kpis: [{label, value, tone}], meta: [[k,v]], signatures: [{label, name, title, sigId|image, signedAt, date}]
    draft: false | true | 'TEXT' (light diagonal mark on every page) */
-async function brandPdf({ file, title, subtitle, orientation = 'landscape', meta = [], kpis = [], sections = [], signatures = [], intro, draft = false, output }) {
+async function brandPdf(args) {
+  // 3.0.7: long PDFs show a progress overlay while they are made
+  const n = (args.sections || []).reduce((a, s) => a + (s.rows || []).length, 0);
+  if (n > 250 && typeof withProgress === 'function' && !document.querySelector('.dl-prog')) return withProgress('Making the PDF…', () => brandPdf2(args));
+  return brandPdf2(args);
+}
+async function brandPdf2({ file, title, subtitle, orientation = 'landscape', meta = [], kpis = [], sections = [], signatures = [], intro, draft = false, output }) {
   const doc = await pdfInit(orientation);
   const W = doc.internal.pageSize.getWidth(), H = doc.internal.pageSize.getHeight();
   const decorate = await pdfFrame(doc, { title, subtitle, draft });

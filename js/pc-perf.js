@@ -408,6 +408,7 @@ PF.pages.settings = { perms: ['update-performance-settings', 'view-perspective',
         actions: `<span class="muted pf-intro">${esc(intro)}</span>` + (canAdd ? `<button class="btn primary small" type="button" data-pfl="new">${ico('plus')}Add</button>` : '') });
   },
   bind(main) {
+    settingsAccordion(main, 'perf-' + this.tab);
     const f = $('#pfset', main);
     if (f) f.onsubmit = async e => { e.preventDefault(); const keys = PF_RULES.flatMap(([, rs]) => rs.map(r => r[0])); const v = pcRead(f, [{ k: 'setters', t: 'checks' }, ...keys.map(k => ({ k, t: 'switch' }))]);
       if (!v.setters.length) return toast('Choose who can set objectives', true);

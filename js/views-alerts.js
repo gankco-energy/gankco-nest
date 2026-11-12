@@ -106,8 +106,8 @@ function maintTick() {
   const sig = maintSig();
   if (sig !== S.maint.sig) { S.maint.sig = sig; if (!document.querySelector('dialog[open]')) render({ quiet: true }); }
 }
-setInterval(() => { if (S.session && isActive()) { maintTick(); } }, 30000);
-setInterval(() => { if (S.session && isActive()) onMaintChange(); }, 120000);
+setInterval(() => { if (S.session && isActive() && !S.gate) { maintTick(); } }, 30000);
+setInterval(() => { if (S.session && isActive() && !S.gate) onMaintChange(); }, 120000);
 
 // ================================================================ MAINTENANCE: Settings panel (Developer)
 function maintPanel() {
