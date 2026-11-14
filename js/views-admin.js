@@ -241,8 +241,8 @@ ROUTES.locations = {
 const ACCESS_GROUPS = [['ops', 'Eng & Ops', 'Engineering & Operations'], ['qhse', 'QHSE', 'QHSE']];
 const groupDepts = g => S.depts.filter(d => (d.access_group || 'ops') === g).map(d => d.id);
 const accessOf = pid => { const mine = S.members.filter(m => m.profile_id === pid).map(m => m.department_id); return ACCESS_GROUPS.map(a => a[0]).filter(g => groupDepts(g).some(id => mine.includes(id))); };
-const APP_LIST = [['inventory', 'Inventory'], ['po', 'Purchase Order'], ['proforma', 'PFI & Quote'], ['people', 'PeopleCore']];
-const appRolePick = (p, k, name) => APP_ROLES[k] ? `<select class="inline mini" ${name ? `name="${name}"` : `data-approle="${k}" data-pid="${p.id}"`}>${APP_ROLES[k].map(([v, l]) => opt(v, l, (p.app_roles || {})[k] || 'staff')).join('')}</select>` : '';
+const APP_LIST = [['inventory', 'Inventory'], ['jobtrack', 'JobTrack'], ['po', 'Purchase Order'], ['proforma', 'PFI & Quote'], ['people', 'PeopleCore']];
+const appRolePick = (p, k, name) => APP_ROLES[k] ? `<select class="inline mini" ${name ? `name="${name}"` : `data-approle="${k}" data-pid="${p.id}"`}>${APP_ROLES[k].map(([v, l]) => opt(v, l, (p.app_roles || {})[k] || (k === 'jobtrack' ? 'engineer' : 'staff'))).join('')}</select>` : '';
 ROUTES.team = {
   async load() {
     if (!isSuper()) return topbar('Team & access') + '<div class="notice">Only the Developer manages who uses Nest.</div>';
@@ -294,12 +294,15 @@ ROUTES.team = {
           ${rows.length ? `<div class="tablewrap"><table class="t stack"><thead><tr><th>Service line</th><th>Staff</th><th>Receive PO deliveries</th></tr></thead><tbody>
           ${rows.map(({ d, m, p }) => `<tr><td>${esc(d.short_name || d.name)}</td><td class="name">${esc(p.full_name || p.email)}</td><td><label class="switch mini"><input type="checkbox" data-porecv="${p.id}" data-dept="${d.id}" ${m.po_receive ? 'checked' : ''}><span class="sw"></span><span class="sub">${m.po_receive ? 'Yes' : 'No'}</span></label></td></tr>`).join('')}</tbody></table></div>` : '<div class="body"><span class="sub">No staff in service lines yet.</span></div>'}</section>`;
       })()}
-      <section class="panel"><header><h2>What each role can do</h2><span class="meta">Inventory, Purchase Order, PFI & Quote, PeopleCore</span></header><div class="body">
+      <section class="panel"><header><h2>What each role can do</h2><span class="meta">Inventory, JobTrack, Purchase Order, PFI & Quote, PeopleCore</span></header><div class="body">
         <p class="muted">Each app has its own roles. Being an admin in one app gives nothing in another.</p>
         <dl class="kv mt">
         <dt>Inventory · Admin</dt><dd>Manages items, stock, locations, labels and Inventory settings in every line. Approves requests, stock changes and counts only for the lines where you’ve made them main or backup admin. Can switch to <b>My view</b> to work as staff do.</dd>
         <dt>Inventory · Staff</dt><dd>Day-to-day work in the teams their access covers (Eng &amp; Ops, QHSE or both): materials requests, returns, receiving, moving, monthly counts and certificates. Quantity corrections go to the line’s admin.</dd>
         <dt>Inventory · Viewer</dt><dd>Sees the Overview, stock, Reports and Sign-offs (with prices) and can add and edit jobs in the Job planner. Can’t raise requests, approve or count.</dd>
+        <dt>JobTrack · Admin</dt><dd>Operations managers. Set up jobs, clients, crew and ticket items; see every job; review daily reports; approve tickets (or the approvers chosen in JobTrack settings); JobTrack settings.</dd>
+        <dt>JobTrack · Engineer</dt><dd>Daily Operation Reports, tickets and reimbursables on the jobs they’re crew on (or lead). Sees only those jobs. No prices anywhere in JobTrack.</dd>
+        <dt>JobTrack · Viewer</dt><dd>Management. Sees every job, report, breakdown and ticket and downloads them. Can’t change anything.</dd>
         <dt>Purchase Order · Staff</dt><dd>Raises POs with no approval step, and revises, cancels and closes their own. Only you can delete a PO.</dd>
         <dt>Purchase Order · Viewer</dt><dd>Sees the Overview and every PO, and downloads them. Can’t change anything.</dd>
         <dt>PFI &amp; Quote</dt><dd>Admin or Staff. The app is still being built; switching it on now just gets people ready.</dd>

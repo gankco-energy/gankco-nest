@@ -1,4 +1,4 @@
-# GANKCO Nest: version 3.0.7 (PeopleCore: Reports & Analytics, payslips HR sends when ready, and a record of every download)
+# GANKCO Nest: version 3.0.8 (JobTrack: field jobs, daily operation reports and job tickets)
 
 *Built to support engineered solutions.*
 
@@ -8,6 +8,44 @@
 - **Database and sign-in:** Supabase project in the **GANKCO Energy Services** organization (Nest Gmail; Ehis also an Owner).
 - **Emails:** sent by Brevo from **nest-alerts@gankcoenergy.com** as "GANKCO Nest". Sign-in emails use Supabase's custom SMTP (templates in Supabase → Authentication → Emails → Templates). Alert emails use the Brevo API key saved in Supabase Vault as `brevo_api_key`, on a schedule (pg_cron).
 - **DNS (company IT):** `nest` CNAME → `gankco-energy.github.io`, plus the Brevo verification records.
+
+## Install 3.0.8 (about 3 minutes)
+
+3.0.7 must already be installed.
+
+1. **Supabase → SQL Editor:** open a **New query**, paste the whole of **`24-nest-v3.0.8-upgrade.sql`**, press **Run**. It ends with **Nest 3.0.8 installed**. It is all-or-nothing and safe to run again.
+2. **GitHub:** unzip **`gankco-nest-v3.0.8.zip`** and upload everything into **github.com/gankco-energy/gankco-nest**, then commit. Keep the `CNAME` file.
+3. Reload Nest (**Ctrl + Shift + R**). The footer says **v3.0.8**.
+4. **Give people JobTrack** on *Nest admin → Team & access*: tick **JobTrack** and choose **Admin** (operations managers), **Engineer** (field crew) or **Viewer** (management).
+5. **In JobTrack → JobTrack settings**, choose who approves tickets (if nobody is ticked, every JobTrack Admin can).
+
+### What's new in 3.0.8: JobTrack
+A new app on the home screen, right after Inventory. It holds field jobs, the Daily Operation Report, the Operations Breakdown and unpriced tickets. **There are no prices anywhere in JobTrack**: BD prices tickets in PFI & Quote (next releases).
+- **Roles:** Admin (operations managers: set up jobs, clients, crew and ticket items; review reports; approve tickets), Engineer (daily reports and tickets on the jobs they're crew on; they see only those jobs), Viewer (management: sees everything, changes nothing).
+- **Jobs:** numbered `GES-JT-OPR-0001-2026` and so on. Each job has a client, client PO, project, field and wells (engineers add wells as the crew moves), lead engineer, crew (Nest users, or typed names for subcontractors), equipment groups (Slickline, TTSC, Crane by default), and the ticket items it will use. Status: Planned, Mobilised, On location, Demobilised, Closed.
+- **Daily Operation Report** (built for phones, in GANKCO's DOR layout):
+  - one report per well per day; on a moving day, the new well gets its own report;
+  - Nest counts the report number, days on well and days without LTI;
+  - real clock times in the operations breakdown, with hours added up;
+  - new **Equipment status** row: each group is Op, Stdby, Mob, Demob or Off for the day;
+  - HSE, POB, comments, look ahead and photos;
+  - **Copy for WhatsApp** makes a short summary for the operations group;
+  - **No signal?** Typing is kept on the phone, and a report saved without signal is sent by itself when the phone is back online;
+  - the operations manager marks reports reviewed or sends them back;
+  - PDF in the DOR layout (client logos top left, GANKCO top right), and Excel for the whole job (one sheet a day, plus the Operations Breakdown).
+- **Operations Breakdown:** built from the reports, day by day, with operating/standby totals per group. Excel and PDF.
+- **Tickets** (`…-T01`, `…-T02`), for one well or several and the dates chosen:
+  - Nest fills the lines from the job's ticket items and **counts the days from the daily reports** (operating and standby days per equipment group, days on location for feeding and accommodation, mobilisation and demobilisation);
+  - any count can be changed, with a reason, which prints on the ticket;
+  - lines can be picked from the ticket items list, from Inventory, or typed in (marked *New*);
+  - the engineer signs (Nest signature), uploads the copy the client rep signed, and sends it; the approvers get an email from nest-alerts and a notification;
+  - the approver adds *New* lines to the list (or matches them to an item) and approves, or sends the ticket back;
+  - unpriced ticket as PDF (GANKCO's ticket layout) and Excel.
+- **Reimbursables** (`…-R01`): FTO, community and truck in/out payments, in Naira at cost, with receipts. Engineers who make the payments enter them.
+- **Ticket items:** the list of everything that can go on a ticket and how each is counted, preloaded with 105 lines from GANKCO's own TTSC, TTSHO and slickline tickets.
+- **Clients:** name as shown on reports, address, and up to **3 logos** each (shown top left of the daily report, in the order you choose). A job can use its own logos instead. Heritage (NEPL/SHORELINE/HEOSL OML-30) comes set up with its three logos.
+- **Settings:** equipment groups, ticket approvers, approver emails, and an evening "no daily report yet" reminder (off until switched on).
+- **Elsewhere:** JobTrack is in Team & access, View as…, the maintenance lock (JobTrack can be locked on its own) and the Audit log.
 
 ## Install 3.0.7 (about 3 minutes)
 

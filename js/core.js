@@ -58,11 +58,12 @@ const subtypeName = id => (S.subtypes || []).find(t => t.id === +id)?.name || ''
 const CERT_KINDS = { certification: 'Certification', calibration: 'Calibration', maintenance: 'Maintenance', inspection: 'Inspection', pressure_test: 'Pressure test' };
 const ROLE_LABEL = { pending: 'Waiting for approval', staff: 'Staff', superadmin: 'Developer', disabled: 'No access', admin: 'Admin', viewer: 'Viewer', management: 'Viewer' };
 // 3.0.4: a role per app. The Developer (key 'superadmin') is admin everywhere; being an admin in one app gives nothing in another.
-const APP_ROLES = { inventory: [['admin', 'Admin'], ['staff', 'Staff'], ['viewer', 'Viewer']], po: [['staff', 'Staff'], ['viewer', 'Viewer']], proforma: [['admin', 'Admin'], ['staff', 'Staff']] };
+const APP_ROLES = { inventory: [['admin', 'Admin'], ['staff', 'Staff'], ['viewer', 'Viewer']], jobtrack: [['admin', 'Admin'], ['engineer', 'Engineer'], ['viewer', 'Viewer']], po: [['staff', 'Staff'], ['viewer', 'Viewer']], proforma: [['admin', 'Admin'], ['staff', 'Staff']] };
 const APP_ROLE_HINT = { inventory: { admin: 'Manages items and stock. Approves for the lines where they are main or backup admin.', staff: 'Requests, counts and returns for their service lines.', viewer: 'Sees the Overview and stock, and adds jobs to the Job planner.' },
+  jobtrack: { admin: 'Operations manager: sets up jobs, crew and ticket items, reviews reports and approves tickets.', engineer: 'Daily reports and tickets on the jobs they are crew on.', viewer: 'Sees every job, report and ticket. Changes nothing.' },
   po: { staff: 'Raises, revises, cancels and closes their own POs.', viewer: 'Sees the Overview and POs, and downloads them.' }, proforma: { admin: 'Manages PFIs and quotes.', staff: 'Makes PFIs and quotes.' } };
 const appRoleOf = (p, app) => !p ? null : p.role === 'superadmin' ? (app === 'po' ? 'staff' : 'admin') : p.role !== 'staff' ? null
-  : (p.apps || []).includes(app) ? ((p.app_roles || {})[app] || 'staff') : null;
+  : (p.apps || []).includes(app) ? ((p.app_roles || {})[app] || (app === 'jobtrack' ? 'engineer' : 'staff')) : null;
 
 // roles & service lines
 const realRole = () => S.profile?.role;
@@ -106,14 +107,14 @@ const ADMIN_ROUTES = ['team', 'audit', 'settings', 'devtools'];
 // "View as" is read-only: block every write while it's on
 const VIEW_MSG = 'You’re viewing Nest as another role, so changes are switched off. Press Exit on the orange bar to make changes.';
 const MGMT_MSG = 'You have view-only access to this app, so changes are switched off.';
-const curApp = () => S.shellApp === 'po' ? 'po' : S.shellApp === 'proforma' ? 'proforma' : 'inventory';
+const curApp = () => S.shellApp === 'po' ? 'po' : S.shellApp === 'proforma' ? 'proforma' : S.shellApp === 'jobtrack' ? 'jobtrack' : 'inventory';
 const readOnly = () => !!S.viewAs || appRole(curApp()) === 'viewer';
 (() => {
   const READ_RPC = new Set(['month_totals', 'period_flows', 'mark_notifications_read', 'log_signed_export', 'log_export', 'save_plan_snapshot', 'alert_status', 'preview_alert']);
   const blocked = () => { const msg = S.viewAs ? VIEW_MSG : MGMT_MSG; const p = new Proxy(function () { }, { get: (t, k) => k === 'then' ? (res => res({ data: null, error: { message: msg } })) : () => p, apply: () => p }); return p; };
   const _rpc = sb.rpc.bind(sb), _from = sb.from.bind(sb);
   // 3.0: PeopleCore is everyone's own HR self-service, so Management can use it too (but nothing changes while viewing as a role)
-  const HR_READ = /^hr_(directory|team|my_profile|my_approvals|next_empno)$/;
+  const HR_READ = /^(hr_(directory|team|my_profile|my_approvals|next_empno)|jt_(overview|job_get|report_get|ticket_get|breakdown|cfg|inv_search))$/;
   // 3.0.4: only "View as" blocks writes here; what a Viewer can't do, the server refuses
   sb.rpc = (fn, args, opts) => (S.viewAs && !READ_RPC.has(fn) && fn !== 'log_signed_export' && !HR_READ.test(fn)) ? blocked() : _rpc(fn, args, opts);
   sb.from = t => { const b = _from(t); if (S.viewAs) ['insert', 'update', 'delete', 'upsert'].forEach(m => { b[m] = () => blocked(); }); return b; };
@@ -121,19 +122,19 @@ const readOnly = () => !!S.viewAs || appRole(curApp()) === 'viewer';
 function setViewAs(v) { S.viewAs = v; try { v ? sessionStorage.setItem('nest.viewAs', JSON.stringify(v)) : sessionStorage.removeItem('nest.viewAs'); } catch (e) { } S.shellReady = false; S.inv.edit = false; S.inv.changes.clear(); refreshAlerts(); render(); }
 function viewAsBar() {
   if (!viewAsOn()) return '';
-  const v = S.viewAs; const bits = v.role === 'superadmin' ? ['Developer'] : [['inventory', 'Inventory'], ['po', 'PO']].filter(([k]) => v[k]).map(([k, l]) => `${l} ${ROLE_LABEL[v[k]]}`);
+  const v = S.viewAs; const bits = v.role === 'superadmin' ? ['Developer'] : [['inventory', 'Inventory'], ['jobtrack', 'JobTrack'], ['po', 'PO']].filter(([k]) => v[k]).map(([k, l]) => `${l} ${ROLE_LABEL[v[k]]}`);
   return `<div class="viewas-bar">Viewing as <b>${esc(bits.join(' · ') || 'Staff, no apps')}</b>${v.inventory && v.inventory !== 'viewer' ? ' · ' + esc((v.lines || []).map(lineShort).join(', ') || 'no service line') : ''} · read only <button class="btn small" id="va-exit">Exit</button></div>`;
 }
 function bindViewAs() { const x = $('#va-exit'); if (x) x.onclick = () => setViewAs(null); }
 function openViewAs() {
-  const sel = (n, app) => `<label class="f">${app === 'inventory' ? 'Inventory' : 'Purchase Order'}<select name="${n}"><option value="">No access</option>${APP_ROLES[app].map(([k, l]) => opt(k, l, app === 'inventory' ? 'staff' : 'staff')).join('')}</select></label>`;
+  const sel = (n, app) => `<label class="f">${APP_NAMES[app] || app}<select name="${n}"><option value="">No access</option>${APP_ROLES[app].map(([k, l]) => opt(k, l, app === 'jobtrack' ? 'engineer' : 'staff')).join('')}</select></label>`;
   return modal({
     title: 'View Nest as…', sub: 'See exactly what a person with these roles sees: menu, what can be edited, approvals and reminders. Read only: nothing can be changed while viewing.', submit: 'Start viewing',
-    body: `<div class="grid2">${sel('inventory', 'inventory')}${sel('po', 'po')}</div>
+    body: `<div class="grid2">${sel('inventory', 'inventory')}${sel('po', 'po')}${sel('jobtrack', 'jobtrack')}</div>
       <div class="f">Service line(s)<span class="hint">An Admin here is treated as main admin of the lines you tick. Not needed for a Viewer.</span>${S.depts.map(d => `<label class="check"><input type="checkbox" name="l${d.id}"> ${esc(d.name)}</label>`).join('')}</div>`,
     onSubmit: async x => { const lines = S.depts.filter(d => x['l' + d.id]).map(d => d.id);
       if (x.inventory && x.inventory !== 'viewer' && !lines.length) throw new Error('Tick at least one service line.');
-      setTimeout(() => setViewAs({ role: 'staff', inventory: x.inventory || null, po: x.po || null, lines }), 0); }
+      setTimeout(() => setViewAs({ role: 'staff', inventory: x.inventory || null, po: x.po || null, jobtrack: x.jobtrack || null, lines }), 0); }
   });
 }
 function niceError(e) {
@@ -207,6 +208,7 @@ const I = {
   sign: '<path d="M4 20h16"/><path d="M14.5 4.5l3 3L8 17H5v-3z"/>',
   audit: '<path d="M5 3h10l4 4v14H5z"/><path d="M15 3v4h4M8 12h8M8 16h5"/>',
   gear: '<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/>',
+  derrick: '<path d="M12 2.5 6.5 21.5M12 2.5l5.5 19M8.6 14h6.8M7.4 18h9.2M10.2 8.5h3.6M4 21.5h16"/>',
   send: '<path d="M21 3L10 14"/><path d="M21 3l-7 18-4-7-7-4z"/>',
   bell: '<path d="M6 8a6 6 0 1 1 12 0c0 7 3 8 3 8H3s3-1 3-8"/><path d="M10.3 21a1.9 1.9 0 0 0 3.4 0"/>',
   grid: '<rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/>',
@@ -592,10 +594,11 @@ function canSignReport(r) {
 
 function navItems() {
   if (S.shellApp === 'po' && typeof poNav === 'function') return poNav();
+  if (S.shellApp === 'jobtrack' && typeof jtNav === 'function') return jtNav();
   if (S.shellApp === 'people' && peopleBuilding()) return { main: [['', 'Nest home', 'grid']], setup: [] };
   if (S.shellApp === 'people' && typeof peopleNav === 'function') return peopleNav();
   if (S.shellApp === 'admin') return { main: [...(isSuper() ? [['team', 'Team & access', 'users'], ['audit', 'Audit log', 'audit'], ['settings', 'Nest settings', 'gear'], ['devtools', 'Developer tools', 'wrench']] : []), ['account', 'My account', 'user']],
-    setup: [...(appAllowed('inventory') ? [['dashboard', 'Inventory', 'box']] : []), ...(appAllowed('po') ? [['po/overview', 'Purchase Order', 'audit']] : []), ...(appAllowed('people') ? [['people', 'PeopleCore', 'users']] : [])] };
+    setup: [...(appAllowed('inventory') ? [['dashboard', 'Inventory', 'box']] : []), ...(appAllowed('jobtrack') ? [['jt', 'JobTrack', 'derrick']] : []), ...(appAllowed('po') ? [['po/overview', 'Purchase Order', 'audit']] : []), ...(appAllowed('people') ? [['people', 'PeopleCore', 'users']] : [])] };
   const main = [['dashboard', 'Overview', 'home'], ['inventory', 'Inventory', 'box'], ['scan', 'Scan', 'scan'],
     ['jobs', 'Materials requests', 'truck'], ['planner', 'Job planner', 'plan'], ['checkouts', 'Out on jobs', 'out'], ['count', 'Monthly count', 'count'],
     ['certs', 'Certificates & kits', 'cert'], ['reports', 'Reports', 'chart'], ['signoffs', 'Sign-offs', 'sign'], ['activity', 'Activity', 'clock'],
@@ -614,7 +617,7 @@ function shell() {
   $('#app').innerHTML = `<div class="shell">
     <aside class="side">
       <a class="brand" href="#/"><img src="brand/mark-96.png" alt="">
-        <span class="brand-name">${wordmark()}<small>Nest · ${S.shellApp === 'po' ? 'Purchasing' : S.shellApp === 'admin' ? 'Admin' : S.shellApp === 'people' ? 'PeopleCore' : 'Inventory'}</small></span></a>
+        <span class="brand-name">${wordmark()}<small>Nest · ${S.shellApp === 'po' ? 'Purchasing' : S.shellApp === 'admin' ? 'Admin' : S.shellApp === 'people' ? 'PeopleCore' : S.shellApp === 'jobtrack' ? 'JobTrack' : 'Inventory'}</small></span></a>
       <a class="apps-link" href="#/">${ico('grid')}All apps</a>
       <nav class="nav">${top || ''}${main.map(link).join('')}
         ${setup.length ? `<div class="nav-group">${S.shellApp === 'admin' ? 'Apps' : navItems().setupLabel || 'Setup'}</div>${setup.map(link).join('')}` : ''}</nav>
@@ -626,7 +629,7 @@ function shell() {
     <main id="main"></main>
     <button class="bell" id="bell" aria-label="Notifications">${ico('bell')}<span class="bell-count" hidden></span></button>
     ${meBtn()}
-    ${S.shellApp === 'po' && typeof poBottomBar === 'function' ? poBottomBar() : S.shellApp === 'people' && !peopleBuilding() && typeof peopleBottomBar === 'function' ? peopleBottomBar() : S.shellApp === 'admin' ? `<nav class="bottombar">
+    ${S.shellApp === 'po' && typeof poBottomBar === 'function' ? poBottomBar() : S.shellApp === 'jobtrack' && typeof jtBottomBar === 'function' ? jtBottomBar() : S.shellApp === 'people' && !peopleBuilding() && typeof peopleBottomBar === 'function' ? peopleBottomBar() : S.shellApp === 'admin' ? `<nav class="bottombar">
       ${isSuper() ? `<a href="#/team" data-r="team">${ico('users')}Team</a><a href="#/devtools" data-r="devtools">${ico('wrench')}Tools</a><a href="#/settings" data-r="settings">${ico('gear')}Settings</a>` : ''}
       <a href="#/account" data-r="account">${ico('user')}Account</a><a href="#/" data-r="home">${ico('grid')}Apps</a></nav>` : `<nav class="bottombar">
       <a href="#/dashboard" data-r="dashboard">${ico('home')}Overview</a>
@@ -644,7 +647,7 @@ function shell() {
 function setNav(r) { $$('[data-r]').forEach(a => a.classList.toggle('on', a.dataset.r === r)); }
 
 const ROUTES = {};
-const APP_NAMES = { inventory: 'Inventory', po: 'Purchase Order', people: 'PeopleCore' };
+const APP_NAMES = { inventory: 'Inventory', po: 'Purchase Order', people: 'PeopleCore', jobtrack: 'JobTrack' };
 ROUTES.building = { load: async () => `<div class="build-screen"><div class="build-card"><span class="build-ico">${ico('wrench')}</span><div><span class="maint-pill">PeopleCore · under construction</span></div>
     <h1>PeopleCore is being built</h1><p>Your HR self-service (profile, leave, requests, approvals and the company directory) opens here soon. Nothing for you to do yet.</p>
     <a class="btn primary" href="#/">Back to Nest home</a></div></div>` };
@@ -660,14 +663,14 @@ async function render(opts = {}) {
   if (typeof maintGate === 'function' && maintGate(r)) return;
   if (r === '' || r === 'home') { S.shellReady = false; return renderLauncher(); }
   if (S.inv.edit && r !== 'inventory') { S.inv.edit = false; S.inv.changes.clear(); }
-  const app = r === 'po' ? 'po' : r === 'people' ? 'people' : ADMIN_ROUTES.includes(r) ? 'admin' : r === 'account' ? (S.shellApp || 'admin') : 'inventory';
+  const app = r === 'po' ? 'po' : r === 'people' ? 'people' : r === 'jt' ? 'jobtrack' : ADMIN_ROUTES.includes(r) ? 'admin' : r === 'account' ? (S.shellApp || 'admin') : 'inventory';
   if (S.shellApp !== app) { S.shellApp = app; S.shellReady = false; }
   shell();
   // 2.8: an app someone doesn't have can't be opened, even by typing its address
-  const blocked = (app === 'inventory' || app === 'people') && !appAllowed(app);
+  const blocked = (app === 'inventory' || app === 'people' || app === 'jobtrack') && !appAllowed(app);
   // 3.0.4: PeopleCore is under construction for everyone but the Developer and the testers they tick
   const view = blocked ? ROUTES.noapp : app === 'people' && peopleBuilding() ? ROUTES.building : (ROUTES[r] || ROUTES.dashboard);
-  setNav(r === 'item' ? 'inventory' : r === 'job' ? 'jobs' : r === 'po' ? (parts[1] && isNaN(+parts[1]) ? 'po/' + parts[1] : 'po') : r === 'people' ? (typeof pcNavKey === 'function' ? pcNavKey(parts) : typeof hrNavKey === 'function' ? hrNavKey(parts) : 'people') : r);
+  setNav(r === 'item' ? 'inventory' : r === 'job' ? 'jobs' : r === 'po' ? (parts[1] && isNaN(+parts[1]) ? 'po/' + parts[1] : 'po') : r === 'jt' ? (typeof jtNavKey === 'function' ? jtNavKey(parts) : 'jt') : r === 'people' ? (typeof pcNavKey === 'function' ? pcNavKey(parts) : typeof hrNavKey === 'function' ? hrNavKey(parts) : 'people') : r);
   let main = $('#main'); const seq = ++renderSeq;
   const y = window.scrollY;
   if (!opts.quiet) main.innerHTML = '<div class="loading">Loading…</div>';
@@ -746,7 +749,7 @@ function appTile(scope, href, icon, name, desc, meta, live) {
 function lockedTile(icon, name, desc) {
   return `<div class="tile locked" aria-disabled="true" title="You don’t have access to ${name}"><span class="t-ico">${ico(icon)}</span><span class="t-name">${name}<span class="t-lock" aria-hidden="true">${ico('lock')}</span></span><span class="t-desc">${desc}</span><span class="t-meta">You don’t have access. Ask the Developer.</span></div>`;
 }
-// 3.0.7: the home screen arranges itself. Apps you can open come first, in a set order (PeopleCore, Inventory, Purchase Order,
+// 3.0.7: the home screen arranges itself. Apps you can open come first, in a set order (PeopleCore, Inventory, JobTrack, Purchase Order,
 // PFI & Quote); then apps not open to you yet; apps under maintenance go last and move back when maintenance ends
 function launcherTiles(list) {
   const rank = ([k, h]) => (k !== 'proforma' && typeof maintWin === 'function' && maintWin(k)) ? 2 : /class="tile live/.test(h) ? 0 : 1;
@@ -768,6 +771,7 @@ async function renderLauncher() {
         : setting('people_live', false) === true ? lockedTile('users', 'PeopleCore', 'Your HR self-service: profile, leave, requests, approvals and the company directory.')
         : appTile('people', null, 'users', 'PeopleCore', 'Your HR self-service: profile, leave, requests, approvals and the company directory.', `<span class="t-meta">${setting('people_construction', null)?.on ? 'Under construction' : 'Coming soon'}</span>`)],
       ['inventory', appAllowed('inventory') ? appTile('inventory', '#/dashboard', 'box', 'Inventory', 'Equipment, stock, materials requests, monthly counts and reports.', '<span class="t-meta" id="invMeta">Open</span>', true) : lockedTile('box', 'Inventory', 'Equipment, stock, materials requests, monthly counts and reports.')],
+      ['jobtrack', appAllowed('jobtrack') ? appTile('jobtrack', '#/jt', 'derrick', 'JobTrack', 'Field jobs, daily operation reports and job tickets.', '<span class="t-meta" id="jtMeta">Open</span>', true) : lockedTile('derrick', 'JobTrack', 'Field jobs, daily operation reports and job tickets.')],
       ['po', typeof poCanView === 'function' && poCanView() ? appTile('po', '#/po/overview', 'audit', 'Purchase Order', 'Raise, sign and track purchase orders to OEMs and suppliers.', '<span class="t-meta" id="poMeta">Open</span>', true) : lockedTile('audit', 'Purchase Order', 'Raise, sign and track purchase orders to OEMs and suppliers.')],
       ['proforma', appTile('proforma', null, 'chart', 'Proforma Invoice &amp; Quote', 'Prepare quotes and proforma invoices for clients.', '<span class="t-meta">Coming later</span>')]])}
     </section>
@@ -780,6 +784,7 @@ async function renderLauncher() {
   const m = $('#invMeta'); if (m) { const n = S.alerts.reminders.length; m.textContent = n ? `${plural(n, 'thing')} ${n === 1 ? 'needs' : 'need'} attention` : 'All up to date'; if (n) m.classList.add('hot'); }
   const pm = $('#poMeta'); if (pm && typeof poTileMeta === 'function') poTileMeta(pm);
   const hm = $('#hrMeta'); if (hm && typeof peopleTileMeta === 'function') peopleTileMeta(hm);
+  const jm = $('#jtMeta'); if (jm && typeof jtTileMeta === 'function') jtTileMeta(jm);
 }
 
 // Handheld (keyboard-wedge) scanners: fast keystrokes ending in Enter, outside any text field
