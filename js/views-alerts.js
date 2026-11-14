@@ -240,7 +240,7 @@ function myAlertsPanel() {
   const what = isMgmt() ? 'a <b>Monday weekly summary</b>: stock, Job planner readiness, ship-in cost and sign-offs'
     : isAdmin() ? 'a <b>7:30 am summary</b> (Monday to Friday) of what needs you, and a <b>Monday</b> email with low stock and faulty items'
     : 'a <b>7:30 am summary</b> (Monday to Friday) of your own to-dos: receipts to confirm, items due back, the monthly count';
-  return `<section class="panel"><header><h2>Email alerts</h2>${on ? chip('ok', 'On') : chip('muted', 'Off')}</header><div class="body">
+  return `<section class="panel"><header><h2>Inventory email alerts</h2>${on ? chip('ok', 'On') : chip('muted', 'Off')}</header><div class="body">
     <p class="muted">Nest sends you ${what}. Only on days when there’s something for you.</p>
     <label class="switch"><input type="checkbox" id="my-alerts" ${on ? 'checked' : ''}><span class="sw"></span><span><b>Email me these alerts</b><span class="sub">Sent to ${esc(p.email)}</span></span></label></div></section>`;
 }

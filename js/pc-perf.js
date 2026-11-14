@@ -362,7 +362,7 @@ PF.pages.settings = { perms: ['update-performance-settings', 'view-perspective',
   async load(rest) {
     const tab = this.tab = rest[0] || (pcCan('update-performance-settings') ? 'general' : 'persp');
     const T = [['general', 'General', ['update-performance-settings']], ['scale', 'Rating scale', ['update-performance-settings']], ['persp', 'Perspectives', ['view-perspective', 'create-perspective']],
-      ['cv', 'Core values', ['view-corevalue', 'create-corevalue']], ['tags', 'Rating tags', ['view-rating', 'create-rating']], ['peers', '360° reviews', ['update-performance-settings']], ['pip', 'PIP', ['update-performance-settings']]];
+      ['cv', 'Core values', ['view-corevalue', 'create-corevalue']], ['tags', 'Rating tags', ['view-rating', 'create-rating']], ['peers', '360° reviews', ['update-performance-settings']], ['pip', 'PIP', ['update-performance-settings']], ['reminders', 'Reminders', ['update-performance-settings']]];
     const head = topbar('Performance settings', 'How objectives, ratings and appraisals work at GANKCO.') + pcTabs(T.map(([k, l, p]) => ['#/people/admin/perf/settings/' + k, l, p]), '#/people/admin/perf/settings/' + tab);
     const cfg = pfCfg();
     if (tab === 'general') {
@@ -384,6 +384,16 @@ PF.pages.settings = { perms: ['update-performance-settings', 'view-perspective',
         { k: 'peer_named', l: 'People who can open an appraisal report see each peer’s name with their ratings and comments', t: 'switch' },
         { k: 'sub_named', l: 'People who can open an appraisal report see each subordinate’s name with their ratings and comments', t: 'switch' }];
       return head + `<section class="panel"><header><h2>360° reviews</h2><span class="meta">Peers and subordinates rate core values only</span></header><div class="body"><form id="pfsub" data-key="peers">${pcForm(this.F, p)}<button class="btn primary">Save</button></form></div></section>`;
+    }
+    if (tab === 'reminders') {
+      const r = { on: true, perf_open: 3, perf_close: 3, obj: 3, survey: 2, ...(cfg.reminders || {}) };
+      this.F = [{ k: 'on', l: 'Send date reminders', t: 'switch', hint: 'They go to the bell, by email and to phones, like every Nest notification.' },
+        { k: 'perf_open', l: 'Days before an appraisal or review opens', t: 'number', min: 0, max: 30, hint: 'Staff are told it’s coming, and HR is reminded to open it. They’re reminded again on the opening day. 0 for the opening day only.' },
+        { k: 'perf_close', l: 'Days before an appraisal or review closes', t: 'number', min: 0, max: 30, hint: 'Whoever still has a step (self-appraisal, scores, reveal, sign-off), and again on the closing day.' },
+        { k: 'obj', l: 'Days before the objectives deadline', t: 'number', min: 0, max: 30, hint: 'Staff who haven’t sent their objectives, and again on the deadline.' },
+        { k: 'survey', l: 'Days before a survey is due', t: 'number', min: 0, max: 30, hint: 'People who haven’t answered, and again on the due date. Each survey’s own “remind every” still works too.' }];
+      return head + `<section class="panel"><header><h2>Date reminders</h2><span class="meta">Sent at 08:00</span></header><div class="body"><form id="pfsub" data-key="reminders">${pcForm(this.F, r)}
+        <div class="acc-save"><button class="btn primary">Save</button></div></form></div></section>`;
     }
     if (tab === 'pip') {
       const p = cfg.pip || {};

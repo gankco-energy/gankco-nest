@@ -1,4 +1,4 @@
-# GANKCO Nest: version 3.0.9 (JobTrack field feedback, and apps in testing)
+# GANKCO Nest: version 3.0.10 (phone notifications and emails for every bell notification)
 
 *Built to support engineered solutions.*
 
@@ -8,6 +8,54 @@
 - **Database and sign-in:** Supabase project in the **GANKCO Energy Services** organization (Nest Gmail; Ehis also an Owner).
 - **Emails:** sent by Brevo from **nest-alerts@gankcoenergy.com** as "GANKCO Nest". Sign-in emails use Supabase's custom SMTP (templates in Supabase → Authentication → Emails → Templates). Alert emails use the Brevo API key saved in Supabase Vault as `brevo_api_key`, on a schedule (pg_cron).
 - **DNS (company IT):** `nest` CNAME → `gankco-energy.github.io`, plus the Brevo verification records.
+
+## Install 3.0.10 (about 8 minutes)
+
+3.0.9 must already be installed.
+
+1. **Supabase → SQL Editor:** open a **New query**, paste the whole of **`26-nest-v3.0.10-upgrade.sql`**, press **Run**. It ends with **Nest 3.0.10 installed**. It is all-or-nothing and safe to run again.
+2. **Supabase → Edge Functions → Deploy a new function → Via Editor:**
+   - Name it exactly **`nest-push`**.
+   - Delete the sample code, paste the whole of **`nest-push/index.ts`**, and press **Deploy function**.
+   - Open the function's **Details** (or Settings) and switch **off** "Verify JWT with legacy secret" / "Enforce JWT verification". Save.
+   - You don't add any secret or key. The function makes its own sending keys the first time it runs and keeps them inside Supabase.
+3. **GitHub:** unzip **`gankco-nest-v3.0.10.zip`** and upload everything into **github.com/gankco-energy/gankco-nest**, then commit. Keep the `CNAME` file. (New files: `sw.js` at the top level, `js/push.js`, `brand/badge-96.png`.)
+4. Reload Nest (**Ctrl + Shift + R**). The footer says **v3.0.10**.
+5. **Try it on your phones:**
+   - **Android (Chrome):** sign in. Tap **Allow** on the "Get Nest notifications on this phone" card, then **Allow** on the phone's question. In **My account → Notifications** press **Send me a test**.
+   - **iPhone:** open Nest in Safari, tap **Share → Add to Home Screen**, open Nest from the new icon, sign in, tap **Allow**, then **Send me a test**.
+6. **Nest settings → Phone and email notifications** shows the emails sent today, people waiting, and whether phone sending is ready.
+
+### What's new in 3.0.10
+- **Every bell notification goes to the phone straight away**, in every app (PeopleCore, JobTrack, Purchase Order, Inventory):
+  - on the lock screen and as a banner, like WhatsApp; tapping it opens that page in Nest;
+  - the Nest icon shows the unread count where the phone supports it;
+  - **Android:** works from Chrome. **iPhone:** only when Nest is added to the Home Screen and opened from that icon (Apple's rule).
+- **Asking to allow:**
+  - after signing in on a phone, a card asks to allow notifications; *Not now* asks again after 4 days;
+  - on an iPhone in Safari, the card shows the Add to Home Screen steps instead;
+  - computers are never asked, but can be switched on in My account.
+- **Every bell notification also comes by email:**
+  - one email per person every 15 minutes, listing what's new, each with an **Open** link;
+  - emails for notifications already read in Nest are skipped;
+  - payslips, announcements, invitations and scheduled reports keep their own emails (no second one), and JobTrack's ticket email is now part of the notification email.
+- **Brevo's 300 a day:**
+  - Nest keeps 30 for Supabase's sign-up and password emails and uses up to 270;
+  - every Nest email counts, payslips and alerts included;
+  - when the day runs out, the rest wait for the next day, the most important first (approvals, items sent back, payslips, HSE to fill);
+  - anything waiting 3 days is dropped, since it's already in the bell and on the phone;
+  - change the numbers in Nest settings if the Brevo plan changes.
+- **My account → Notifications:** "Email me my Nest notifications" (on to start), "Notifications on this phone", your devices (with Remove), and **Send me a test**. Signing out of a phone stops its notifications.
+- **Inventory, every app covered:**
+  - a materials request (or item changes or kit details) waiting for approval is now told to the line's approvers the moment it's sent;
+  - **a 07:30 morning summary** goes to the phone and by email, one per person and only if there's something: count opening or late, certificates and kits expiring, items overdue, receipts to confirm, requests waiting, the monthly backup;
+  - people who already get Inventory's own 7:30 alert email (Monday to Friday) get only the phone summary, not a second email.
+- **Date reminders** (PeopleCore → Performance settings → **Reminders**, sent at 08:00):
+  - before an appraisal or review opens (staff told it's coming, HR reminded to open it) and on the opening day;
+  - before it closes and on the closing day (to whoever still has a step);
+  - before the objectives deadline and on it;
+  - before a survey is due and on the due date.
+  - Contract and probation endings and JobTrack's evening reminder now reach the phone and email too.
 
 ## Install 3.0.9 (about 3 minutes)
 

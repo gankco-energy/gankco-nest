@@ -479,9 +479,9 @@ ROUTES.settings = {
     if (!isSuper()) return topbar('Nest settings') + '<div class="notice">Only the Developer can change settings.</div>';
     await loadLookups();
     return topbar('Nest settings', 'These apply to every app. Open a section to change it. Each app’s own settings are in that app’s menu: Inventory settings, and PO settings in the Purchase Order app.') +
-      `${typeof companyPanel === 'function' ? companyPanel() : ''}${await svcPanel()}${await alertsPanel()}${maintPanel()}${appsTestingPanel()}${backupPanel()}`;
+      `${typeof companyPanel === 'function' ? companyPanel() : ''}${await svcPanel()}${await alertsPanel()}${maintPanel()}${appsTestingPanel()}${typeof notifyAdminPanel === 'function' ? await notifyAdminPanel() : ''}${backupPanel()}`;
   },
-  bind(main) { if (typeof bindCompanyPanel === 'function') bindCompanyPanel(main); bindSvcPanel(main); bindBackup(main); bindAlertsPanel(main); bindMaintPanel(main); bindAppsTesting(main);
+  bind(main) { if (typeof bindCompanyPanel === 'function') bindCompanyPanel(main); bindSvcPanel(main); bindBackup(main); bindAlertsPanel(main); bindMaintPanel(main); bindAppsTesting(main); if (typeof bindNotifyAdmin === 'function') bindNotifyAdmin(main);
     settingsAccordion(main, 'settings');
     if (location.hash.includes('#svc')) setTimeout(() => $('#svc', main)?.scrollIntoView({ block: 'start' }), 50); }
 };
@@ -658,6 +658,7 @@ ROUTES.account = {
         ${sigBox(await mySigImage(), 'big')}
         <div class="actionrow mt"><button class="btn primary" id="sigup">${ico('up')}${p.signature_id ? 'Replace signature' : 'Add signature'}</button>${p.signature_id ? '<button class="btn" id="sigfit">Adjust size and position</button><button class="btn danger" id="sigrm">Remove</button>' : ''}</div>
         <p class="sub">Draw it with your finger or mouse, or upload a photo of it signed on plain white paper with a dark pen.</p></div></section>
+      ${typeof myNotifyPanel === 'function' ? await myNotifyPanel() : ''}
       ${myAlertsPanel()}
       <section class="panel"><header><h2>About Nest</h2></header><div class="body">
         <dl class="kv"><dt>App</dt><dd>${esc(CFG.APP_NAME)} v${esc(CFG.VERSION || '')}</dd><dt>Company</dt><dd>${esc(CFG.COMPANY || '')}</dd><dt>Credit</dt><dd>${esc(CREDIT)}</dd></dl></div></section>
@@ -665,7 +666,7 @@ ROUTES.account = {
   },
   bind(main) {
     settingsAccordion(main, 'account');
-    bindMyAlerts(main);
+    bindMyAlerts(main); if (typeof bindMyNotify === 'function') bindMyNotify(main);
     const reload = async () => { S.profile = await q(sb.from('profiles').select('*').eq('id', S.profile.id).maybeSingle()); await loadLookups(); S.shellReady = false; render({ quiet: true }); };
     $('#acc-ph', main).onchange = async e => { try { const ph = await hrPhotoData(e.target.files[0]); await q(sb.rpc('my_profile_save', { p: { photo: ph } })); toast('Photo saved'); if (typeof pcInvalidate === 'function') pcInvalidate(); await reload(); } catch (ex) { toast(niceError(ex), true); } };
     if (!S.profile.hr_linked) $('#prof', main).onsubmit = async e => {

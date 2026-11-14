@@ -364,6 +364,7 @@ async function refreshAlerts() {
     S.alerts = { unread: unread || 0, reminders: R };
     const n = (unread || 0) + R.length;
     $$('.bell-count').forEach(b => { b.textContent = n > 99 ? '99+' : n; b.hidden = !n; });
+    if (typeof pushBadge === 'function' && !S.viewAs) pushBadge(unread || 0);
     const pc = $('#pendingCount'); if (pc) { pc.textContent = S.pending; pc.hidden = !S.pending; }
   } catch (e) { console.warn('alerts', e); }
 }
@@ -446,6 +447,7 @@ async function boot() {
   refreshAlerts(); subscribe(); checkVersion();
   S.shellReady = false; S.gate = null;
   render();
+  if (typeof pushBoot === 'function') pushBoot();
   setTimeout(() => { if (typeof refreshPlanSnapshot === 'function' && !S.viewAs) refreshPlanSnapshot(); }, 8000);
 }
 
@@ -773,6 +775,7 @@ async function renderLauncher() {
     <section class="l-hero"><img class="l-mark" src="brand/mark.png" alt="">
       <div><div class="l-tag">${esc(CFG.TAGLINE || '')}</div><h1>${first ? `Welcome back, ${esc(first)}` : 'Welcome'}</h1>
       <p>Where would you like to go?</p></div></section>
+    ${typeof pushCard === 'function' ? pushCard() : ''}
     <section class="tiles">${launcherTiles([
       ['people', appAllowed('people') && peopleBuilding() ? appTile('people', null, 'users', 'PeopleCore', 'Your HR self-service: profile, leave, requests, approvals and the company directory.', '<span class="t-meta">Under construction</span><span class="t-badge build">Under construction</span>')
         : appAllowed('people') ? appTile('people', '#/people', 'users', 'PeopleCore', 'Your HR self-service: profile, leave, requests, approvals and the company directory.', `<span class="t-meta" id="hrMeta">Open</span>${appTestOn('people') ? '<span class="t-badge build">Under construction · testing</span>' : ''}`, true)
@@ -787,6 +790,7 @@ async function renderLauncher() {
     <footer class="l-foot">${esc(CFG.COMPANY || '')} · ${esc(CFG.MOTTO || '')}<br><span>${esc(CFG.APP_NAME)} v${esc(CFG.VERSION || '')} · <span class="credit">${esc(CREDIT)}</span></span></footer></div>`;
   $('#bell').onclick = openBell; bindMeBtn();
   if (typeof bindMaintBars === 'function') bindMaintBars($('#app'));
+  if (typeof bindPushCard === 'function') bindPushCard($('#app'));
   const va = $('#viewas'); if (va) va.onclick = openViewAs; bindViewAs();
   document.body.classList.toggle('viewing-as', !!(S.viewAs && realSuper()));
   await refreshAlerts();
