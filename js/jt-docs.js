@@ -1,4 +1,4 @@
-/* GANKCO Nest 3.0.8 — JobTrack documents: the Daily Operation Report (PDF and Excel, in GANKCO's DOR layout),
+/* GANKCO Nest 3.0.9 — JobTrack documents: the Daily Operation Report (Excel and a one-page PDF, in GANKCO's own DOR layout from jt-dor.js),
    the unpriced job ticket (PDF and Excel), the reimbursables ticket and the Operations Breakdown. */
 'use strict';
 
@@ -33,123 +33,260 @@ function jtFooter(doc, label) {
 const jtTableStyle = { font: 'Barlow', fontSize: 8.6, cellPadding: { top: 1.4, bottom: 1.4, left: 2, right: 2 }, lineColor: rgb(PDF_INK.box), lineWidth: .2, textColor: rgb(PDF_INK.ink), valign: 'middle' };
 const jtLbl = t => ({ content: jtTxt(t), styles: { fillColor: rgb(JT_GREY), fontStyle: 'bold', textColor: rgb(PDF_INK.ink) } });
 
-// ================================================================ DAILY OPERATION REPORT (PDF)
-async function jtDorBuild(doc, r, j, first) {
-  const W = doc.internal.pageSize.getWidth();
-  if (!first) doc.addPage();
+// ================================================================ DAILY OPERATION REPORT, in GANKCO's own DOR layout (jt-dor.js)
+// One model of the sheet (its rows, cells, merges and logos) is filled from the report. The Excel file writes it as a sheet
+// like the ones the team fills by hand; the PDF draws the same sheet on one A4 page, as Excel prints it with "fit sheet on one page".
+const JT_COLW = 117;                    // column width in pixels, as in the team's workbook (14.63 characters of its Aptos Narrow Normal font)
+const JT_PX = 0.75;                      // points per pixel
+const JT_LINE = 15.6;                    // points per line of 12 pt Calibri
+const jtColPt = () => JT_COLW * JT_PX;
+// 07:25 → 7.25 and 1 h 25 min → 1.25, the way the DOR writes times
+const jtDecTime = t => { const m = jtTm(t); return m == null ? null : Math.floor(m / 60) + (m % 60) / 100; };
+const jtDecDur = m => m == null ? null : Math.floor(m / 60) + (m % 60) / 100;
+function jtTextW(s, size = 12, bold = false) { const W = bold ? JT_DOR.wBold : JT_DOR.wReg; let w = 0; for (const ch of String(s)) w += W[ch.codePointAt(0)] ?? 507; return w * size / 1000; }
+// break text into lines no wider than wPt (12 pt Calibri), keeping the writer's own line breaks
+function jtWrap(text, wPt, size = 12, bold = false) {
+  const out = [];
+  String(text ?? '').replace(/\r/g, '').split('\n').forEach(par => {
+    const words = par.replace(/\t/g, ' ').split(/ +/).filter((w, i, a) => w !== '' || (i > 0 && i < a.length - 1));
+    let line = '';
+    words.forEach(w => {
+      const t = line ? line + ' ' + w : w;
+      if (jtTextW(t, size, bold) <= wPt) { line = t; return; }
+      if (line) out.push(line);
+      line = w;
+      while (jtTextW(line, size, bold) > wPt) { let k = line.length - 1; while (k > 1 && jtTextW(line.slice(0, k), size, bold) > wPt) k--; out.push(line.slice(0, k)); line = line.slice(k); }
+    });
+    out.push(line);
+  });
+  while (out.length > 1 && out[out.length - 1] === '') out.pop();
+  return out;
+}
+const JT_ABC = 'ABCDEFGHIJK';
+const jtA1 = (c, r) => JT_ABC[c] + r;
+const jtRef = a => { const m = /^([A-K])(\d+)$/.exec(a); return [JT_ABC.indexOf(m[1]), +m[2]]; };
+
+// the sheet, filled: { rows: [{h, c: [{s, v}]}], merges: ['A1:C3', ...] } (rows and columns from 1/0)
+function jtDorModel(r, j) {
+  const D = JT_DOR, cw = jtColPt();
+  const clone = rr => ({ h: rr.h, c: rr.c.map(x => ({ s: x[0], v: x[1] ?? null })) });
+  const rows = D.head.map(clone); const merges = [...D.headMerges];
+  const set = (a, v) => { const [c, n] = jtRef(a); rows[n - 1].c[c].v = v === '' || v === undefined ? null : v; };
+  const num = v => v === null || v === undefined || v === '' || isNaN(+v) ? null : +v;
+  set('B4', j.client?.name || ''); set('F4', r.client_reps || ''); set('F5', r.gankco_rep || '');
+  set('J5', r.well_field || j.field || ''); set('K5', r.well || '');
+  set('B6', num(r.report_no)); set('D6', r.report_date ? new Date(r.report_date + 'T00:00:00Z') : null); set('G6', j.project || '');
+  set('I7', j.rig_name || 'N/A'); set('J7', j.rig_owner || 'N/A'); set('K7', j.rig_type || 'N/A');
+  set('B9', num(r.man_hours)); set('E9', num(r.lti_days)); set('G9', num(r.tri) ?? 0); set('I9', r.hse_comment || '');
+  set('C10', r.summary || '');
+  // the summary wraps across C10:K12: give it the height it needs
+  const sumLines = jtWrap(r.summary || '', cw * 9 - 6).length, sumH = rows[9].h + rows[10].h + rows[11].h, need = sumLines * JT_LINE + 3;
+  if (need > sumH) [9, 10, 11].forEach(i => rows[i].h = Math.ceil(rows[i].h * need / sumH * 2) / 2);
+  // the activities: one line a row, long ones carried onto the next rows like the team does
+  const ops = (r.ops || []).filter(o => String(o.desc || '').trim());
+  const lines = [];
+  ops.forEach(o => { const m = jtMins(o.from, o.to); jtWrap(o.desc, cw * 8 - 6).forEach((t, k) => lines.push(k ? { d: t } : { a: jtDecTime(o.from), b: jtDecTime(o.to), c: jtDecDur(m), d: t })); });
+  const n = Math.max(D.opMinRows, lines.length + 2);
+  for (let i = 0; i < n; i++) {
+    const row = clone(i === 0 ? D.opFirst : i === n - 1 ? D.opLast : D.opMid); const L = lines[i];
+    if (L) { row.c[0].v = L.a ?? null; row.c[1].v = L.b ?? null; row.c[2].v = L.c ?? null; row.c[3].v = L.d; }
+    rows.push(row); merges.push(`D${D.opStartRow + i}:K${D.opStartRow + i}`);
+  }
+  // comments and the look ahead, then POB, days on well and the report page
+  const f0 = rows.length + 1;
+  D.foot.forEach(rr => rows.push(clone(rr)));
+  D.footMerges.forEach(([a, r1, b, r2]) => merges.push(`${a}${f0 + r1}:${b}${f0 + r2}`));
+  const fset = (col, k, v) => { rows[f0 - 1 + k].c[JT_ABC.indexOf(col)].v = v === '' || v === undefined ? null : v; };
+  const note = [String(r.comments || '').trim(), String(r.look_ahead || '').trim() ? 'Look Ahead; ' + String(r.look_ahead).trim() : ''].filter(Boolean).join('\n');
+  fset('D', 0, note);
+  const nl = jtWrap(note, cw * 8 - 6).length, nh = rows[f0 - 1].h + rows[f0].h, nneed = nl * JT_LINE + 3;
+  if (nneed > nh) [f0 - 1, f0].forEach(i => rows[i].h = Math.ceil(rows[i].h * nneed / nh * 2) / 2);
+  fset('J', 2, num(r.report_no)); fset('H', 3, num(r.report_no)); fset('J', 3, num(r.well_reports ?? r.report_no));
+  fset('A', 4, num(r.pob_client)); fset('B', 4, num(r.pob_gankco)); fset('C', 4, num(r.pob_others));
+  return { rows, merges };
+}
+// how a value shows in a cell
+const JT_MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+function jtCellText(v, st) {
+  if (v === null || v === undefined) return '';
+  if (v instanceof Date) return /mmmm/.test(st.n) ? `${JT_MONTHS[v.getUTCMonth()]} ${v.getUTCDate()}, ${v.getUTCFullYear()}` : v.toISOString().slice(0, 10);
+  if (typeof v === 'number') return /^0\.00$/.test(st.n) ? v.toFixed(2) : String(Math.round(v * 100) / 100);
+  return String(v);
+}
+async function jtDorImages(j) {
   const logos = await jtLogoImgs((j.logos || []).map(l => l.id));
-  const gk = await imageB64('brand/logo-full.png');
-  jtDrawRow(doc, logos, 10, 8, 62, 15);
-  const gh = 11, gw = gh * gk.w / gk.h; doc.addImage(gk.dataUrl, 'PNG', W - 10 - gw, 10, gw, gh, 'gankco-logo', 'FAST');
-  doc.setFont('Montserrat', 'bold'); doc.setFontSize(15); doc.setTextColor(...rgb(PDF_INK.ink)); doc.text('Daily Operation Report', W / 2, 17.5, { align: 'center' });
-  doc.setFillColor(...rgb(PDF_INK.orange)); doc.rect(10, 25.5, W - 20, .6, 'F');
-  const tbl = (body, opts = {}) => { doc.autoTable({ startY: (doc.lastAutoTable && !opts.fresh ? doc.lastAutoTable.finalY : 29) + (opts.gap ?? 2.5), margin: { left: 10, right: 10, bottom: 16 }, theme: 'grid', styles: jtTableStyle, body, ...opts.t }); };
-  const v = x => jtTxt(x ?? '');
-  tbl([
-    [jtLbl('Client'), { content: v(j.client?.name), colSpan: 3 }, jtLbl('Field'), v(r.well_field || j.field), jtLbl('Well'), v(r.well)],
-    [jtLbl('Client Rep(s)'), { content: v(r.client_reps), colSpan: 3 }, jtLbl('GANKCO Rep'), { content: v(r.gankco_rep), colSpan: 3 }],
-    [jtLbl('Report No'), String(r.report_no ?? ''), jtLbl('Date'), v(fd(r.report_date)), jtLbl('Project / Operation'), { content: v(j.project), colSpan: 3 }],
-    [jtLbl('Rig Name'), v(j.rig_name || 'N/A'), jtLbl('Rig Owner'), v(j.rig_owner || 'N/A'), jtLbl('Rig Type'), v(j.rig_type || 'N/A'), jtLbl('Job No'), v(j.job_no)]
-  ], { fresh: true, t: { columnStyles: { 0: { cellWidth: 22 }, 2: { cellWidth: 16 }, 4: { cellWidth: 26 }, 6: { cellWidth: 16 } } } });
-  doc.autoTable({ startY: doc.lastAutoTable.finalY + 2.5, margin: { left: 10, right: 10, bottom: 16 }, theme: 'grid', styles: jtTableStyle,
-    head: [[{ content: 'GANKCO HSE Statistics', colSpan: 7, styles: { fillColor: rgb('1E1F22'), textColor: [255, 255, 255], fontStyle: 'bold' } }]],
-    body: [[jtLbl('Total Man Hr'), v(jtNum(r.man_hours)), jtLbl('Days Without LTI'), String(r.lti_days ?? ''), jtLbl('TRI'), String(r.tri ?? 0), { content: v(r.hse_comment || 'No incident / accident'), styles: { fontStyle: 'bold' } }]],
-    columnStyles: { 0: { cellWidth: 22 }, 2: { cellWidth: 27 }, 4: { cellWidth: 10 } } });
-  doc.autoTable({ startY: doc.lastAutoTable.finalY + 2.5, margin: { left: 10, right: 10, bottom: 16 }, theme: 'grid', styles: jtTableStyle,
-    body: [[{ content: 'Daily Operations Summary (24hr)', styles: { fillColor: rgb(JT_GREY), fontStyle: 'bold', cellWidth: 34 } }, v(r.summary)]] });
-  const tot = (r.ops || []).reduce((a, o) => a + (jtMins(o.from, o.to) || 0), 0);
-  doc.autoTable({ startY: doc.lastAutoTable.finalY + 2.5, margin: { left: 10, right: 10, bottom: 16 }, theme: 'grid', styles: jtTableStyle,
-    head: [[{ content: 'Operations Breakdown (24 hr)', colSpan: 4, styles: { fillColor: rgb('1E1F22'), textColor: [255, 255, 255], fontStyle: 'bold' } }],
-      [{ content: 'Time from', styles: { fillColor: rgb(JT_GREY) } }, { content: 'Time to', styles: { fillColor: rgb(JT_GREY) } }, { content: 'Total (hr)', styles: { fillColor: rgb(JT_GREY) } }, { content: 'Operation Description', styles: { fillColor: rgb(JT_GREY) } }]],
-    headStyles: { textColor: rgb(PDF_INK.ink), fontStyle: 'bold' },
-    body: [...(r.ops || []).map(o => [v(o.from), v(o.to), jtHm(jtMins(o.from, o.to)), v(o.desc)]), ...(r.ops?.length ? [[{ content: 'Total', colSpan: 2, styles: { fontStyle: 'bold', halign: 'right' } }, { content: jtHm(tot), styles: { fontStyle: 'bold' } }, '']] : [['', '', '', 'None recorded']])],
-    columnStyles: { 0: { cellWidth: 17, halign: 'center' }, 1: { cellWidth: 17, halign: 'center' }, 2: { cellWidth: 17, halign: 'center' } } });
-  const eq = (j.groups || []);
-  if (eq.length) doc.autoTable({ startY: doc.lastAutoTable.finalY + 2.5, margin: { left: 10, right: 10, bottom: 16 }, theme: 'grid', styles: { ...jtTableStyle, halign: 'center' },
-    head: [[{ content: 'Equipment Status', styles: { fillColor: rgb(JT_GREY), textColor: rgb(PDF_INK.ink), halign: 'left' } }, ...eq.map(g => ({ content: jtTxt(g), styles: { fillColor: rgb(JT_GREY), textColor: rgb(PDF_INK.ink) } }))]],
-    headStyles: { fontStyle: 'bold' }, body: [['', ...eq.map(g => JT_EQ[r.equipment?.[g]]?.[2] || '—')]], columnStyles: { 0: { cellWidth: 34 } } });
-  doc.autoTable({ startY: doc.lastAutoTable.finalY + 2.5, margin: { left: 10, right: 10, bottom: 16 }, theme: 'grid', styles: jtTableStyle,
-    body: [[{ content: 'General Comment / Observations', styles: { fillColor: rgb(JT_GREY), fontStyle: 'bold', cellWidth: 34 } }, v(r.comments)],
-      [{ content: 'Look Ahead', styles: { fillColor: rgb(JT_GREY), fontStyle: 'bold' } }, v(r.look_ahead)]] });
-  doc.autoTable({ startY: doc.lastAutoTable.finalY + 2.5, margin: { left: 10, right: 10, bottom: 16 }, theme: 'grid', styles: { ...jtTableStyle, halign: 'center' },
-    head: [[{ content: 'POB', colSpan: 3 }, { content: 'Days on Well', rowSpan: 2 }, { content: 'Report Page', rowSpan: 2 }], ['Client', 'GANKCO', 'Others']],
-    headStyles: { fillColor: rgb(JT_GREY), textColor: rgb(PDF_INK.ink), fontStyle: 'bold', halign: 'center' },
-    body: [[String(r.pob_client ?? ''), String(r.pob_gankco ?? ''), String(r.pob_others ?? ''), String(r.report_no ?? ''), `${r.report_no ?? ''} of ${r.well_reports ?? r.report_no ?? ''}`]] });
-  // photos, on their own page(s) after the report
-  const ph = r.photos || [];
+  const gk = await imageB64('brand/dor-gankco.png').catch(() => imageB64('brand/logo-full.png'));
+  return { logos, gk };
+}
+// where the logos go (pixels from the sheet's top left): the client's up to 3 in A1:C3, GANKCO's in J1:K3, as on the template
+function jtDorLogoBoxes(imgs) {
+  const D = JT_DOR, out = []; const a = D.logoArea; const maxW = JT_COLW * 3 - a.x * 2;
+  const list = imgs.logos.slice(0, 3); let h = a.h; let w = list.reduce((s, i) => s + h * i.w / i.h, 0) + a.gap * Math.max(0, list.length - 1);
+  if (w > maxW) { h = h * (maxW - a.gap * (list.length - 1)) / (w - a.gap * (list.length - 1)); }
+  let x = a.x; list.forEach(i => { const iw = h * i.w / i.h; out.push({ img: i, x, y: a.y + (a.h - h) / 2, w: iw, h }); x += iw + a.gap; });
+  const g = D.gankco; if (imgs.gk) out.push({ img: imgs.gk, x: g.col * JT_COLW + g.colOff, y: g.row * 20 + g.rowOff, w: g.w, h: g.h, gankco: true });
+  return out;
+}
+
+// ---------------------------------------------------------------- the Excel file: one sheet a report, named like the team's (19-7-26)
+const jtXlBorder = s => s ? { style: s, color: { argb: 'FF000000' } } : undefined;
+function jtDorSheet(wb, name, model, imgs, ids) {
+  const D = JT_DOR;
+  const ws = wb.addWorksheet(name, { views: [{ zoomScale: 70 }],
+    pageSetup: { paperSize: 9, orientation: 'portrait', fitToPage: true, fitToWidth: 1, fitToHeight: 1, margins: { ...D.margins } } });
+  for (let c = 1; c <= D.cols; c++) ws.getColumn(c).width = (JT_COLW - 5) / 7;           // the same 117 px with Excel's default font
+  model.rows.forEach((rr, i) => {
+    const row = ws.getRow(i + 1); row.height = rr.h;
+    rr.c.forEach((cell, c) => {
+      const st = D.styles[cell.s]; const x = row.getCell(c + 1);
+      if (cell.v !== null && cell.v !== undefined) x.value = cell.v;
+      x.font = { name: st.f[0], size: st.f[1], bold: st.f[2] || undefined, ...(st.c ? { color: { argb: 'FF' + st.c } } : {}) };
+      const b = {}; ['left', 'top', 'right', 'bottom'].forEach((k, n) => { const v = jtXlBorder(st.b[n]); if (v) b[k] = v; }); if (Object.keys(b).length) x.border = b;
+      const al = {}; if (st.h) al.horizontal = st.h; if (st.v) al.vertical = st.v === 'center' ? 'middle' : st.v; if (st.w) al.wrapText = true; if (Object.keys(al).length) x.alignment = al;
+      if (st.n) x.numFmt = st.n;
+    });
+  });
+  model.merges.forEach(m => { try { ws.mergeCells(m); } catch (e) { } });
+  ws.pageSetup.printArea = `A1:K${model.rows.length}`;
+  // logos, placed exactly (in EMU: 9525 to a pixel) from the top left of their cell
+  jtDorLogoBoxes(imgs).forEach(b => {
+    const id = ids.get(b.img); const col = Math.floor(b.x / JT_COLW);
+    ws.addImage(id, { tl: { nativeCol: col, nativeColOff: Math.round((b.x - col * JT_COLW) * 9525), nativeRow: 0, nativeRowOff: Math.round(b.y * 9525) }, ext: { width: b.w, height: b.h }, editAs: 'oneCell' });
+  });
+  return ws;
+}
+const jtSheetDate = d => { const x = new Date(d + 'T00:00:00'); return `${x.getDate()}-${x.getMonth() + 1}-${String(x.getFullYear()).slice(2)}`; };
+const jtShortDate = d => { const x = new Date(d + 'T00:00:00'); return `${jtOrd(x.getDate())} ${x.toLocaleDateString('en-GB', { month: 'short' })}`; };
+// all the job's reports, or just the ones given
+async function jtDorWorkbook(j, onlyIds) {
+  await loadScript('vendor/exceljs.min.js');
+  const X = window.ExcelJS, wb = new X.Workbook(); wb.creator = S.profile?.full_name || ''; wb.lastModifiedBy = S.profile?.full_name || '';
+  const ids = (onlyIds?.length ? j.reports.filter(r => onlyIds.includes(r.id)) : j.reports).slice().sort((a, b) => a.report_date.localeCompare(b.report_date) || a.well.localeCompare(b.well)).map(r => r.id);
+  if (!ids.length) return toast('There are no daily reports yet.', true);
+  const full = []; for (const id of ids) full.push(await q(sb.rpc('jt_report_get', { p_id: id })));
+  const imgs = await jtDorImages(j);
+  const imgIds = new Map();
+  [...imgs.logos, imgs.gk].filter(Boolean).forEach(i => imgIds.set(i, wb.addImage({ base64: i.dataUrl.split(',')[1], extension: /image\/png/.test(i.dataUrl.slice(0, 30)) ? 'png' : 'jpeg' })));
+  const perDay = {}; full.forEach(r => { perDay[r.report_date] = (perDay[r.report_date] || 0) + 1; });
+  const used = new Set();
+  for (const r of full) {
+    let name = safeSheet(jtSheetDate(r.report_date) + (perDay[r.report_date] > 1 ? `(${r.well})` : ''));
+    let k = 2; while (used.has(name)) name = safeSheet(`${name.slice(0, 26)} ${k++}`); used.add(name);
+    jtDorSheet(wb, name, jtDorModel(r, j), imgs, imgIds);
+  }
+  const buf = await wb.xlsx.writeBuffer();
+  const d1 = full[0].report_date, d2 = full[full.length - 1].report_date;
+  const label = j.job_type || j.project || j.job_no;
+  const fname = full.length === 1 ? `DOR - ${full[0].well} - ${jtShortDate(d1)} ${d1.slice(0, 4)}.xlsx` : `General DOR - ${label} ${jtShortDate(d1)} - ${jtShortDate(d2)} ${d2.slice(0, 4)}.xlsx`;
+  saveBlob(new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }), jtFile(fname));
+}
+
+// ---------------------------------------------------------------- the PDF: the same sheet, fitted on one A4 page (as printed from Excel)
+async function jtDorDoc() {
+  await loadScript('vendor/jspdf.umd.min.js'); await loadScript('vendor/po-fonts.js');
+  const doc = new window.jspdf.jsPDF({ orientation: 'portrait', unit: 'pt', format: 'a4', compress: true });
+  const F = window.PO_FONTS;
+  doc.addFileToVFS('Carlito-Regular.ttf', F['Carlito-Regular']); doc.addFont('Carlito-Regular.ttf', 'Carlito', 'normal');
+  doc.addFileToVFS('Carlito-Bold.ttf', F['Carlito-Bold']); doc.addFont('Carlito-Bold.ttf', 'Carlito', 'bold');
+  doc.setFont('Carlito', 'normal');
+  return doc;
+}
+function jtDorDraw(doc, model, imgs) {
+  const D = JT_DOR, cw = jtColPt();
+  const PW = doc.internal.pageSize.getWidth(), PH = doc.internal.pageSize.getHeight();
+  const m = { l: D.margins.left * 72, r: D.margins.right * 72, t: D.margins.top * 72, b: D.margins.bottom * 72 };
+  const ys = [0]; model.rows.forEach(rr => ys.push(ys[ys.length - 1] + rr.h));
+  const sheetW = cw * D.cols, sheetH = ys[ys.length - 1];
+  const k = Math.min(1, (PW - m.l - m.r) / sheetW, (PH - m.t - m.b) / sheetH);
+  const X = c => m.l + c * cw * k, Y = r => m.t + ys[r] * k;           // c: column edge (0..11), r: row edge (0..n)
+  // merged ranges: [c1, r1, c2, r2] (0-based, inclusive)
+  const mg = model.merges.map(s => { const [a, b] = s.split(':'); const [c1, r1] = jtRef(a), [c2, r2] = jtRef(b); return [c1, r1 - 1, c2, r2 - 1]; });
+  const mergeOf = (c, r) => mg.find(([c1, r1, c2, r2]) => c >= c1 && c <= c2 && r >= r1 && r <= r2);
+  const same = (c, r, c2, r2) => { const a = mergeOf(c, r); return !!a && a === mergeOf(c2, r2); };
+  // borders, weakest first so the stronger ones show on top
+  const W = { dashed: 1, thin: 2, medium: 3, double: 4 };
+  const segs = [];
+  model.rows.forEach((rr, r) => rr.c.forEach((cell, c) => {
+    const b = D.styles[cell.s].b;
+    if (b[0] && !same(c, r, c - 1, r)) segs.push([b[0], X(c), Y(r), X(c), Y(r + 1), 'v']);
+    if (b[2] && !same(c, r, c + 1, r)) segs.push([b[2], X(c + 1), Y(r), X(c + 1), Y(r + 1), 'v']);
+    if (b[1] && !same(c, r, c, r - 1)) segs.push([b[1], X(c), Y(r), X(c + 1), Y(r), 'h']);
+    if (b[3] && !same(c, r, c, r + 1)) segs.push([b[3], X(c), Y(r + 1), X(c + 1), Y(r + 1), 'h']);
+  }));
+  segs.sort((a, b) => (W[a[0]] || 0) - (W[b[0]] || 0));
+  doc.setDrawColor(0, 0, 0); doc.setLineCap('butt');
+  segs.forEach(([s, x1, y1, x2, y2, o]) => {
+    if (s === 'double') { const g = 1.1 * k; doc.setLineDashPattern([], 0); doc.setLineWidth(0.6 * k);
+      if (o === 'h') { doc.line(x1, y1 - g, x2, y2 - g); doc.line(x1, y1 + g, x2, y2 + g); } else { doc.line(x1 - g, y1, x2 - g, y2); doc.line(x1 + g, y1, x2 + g, y2); } return; }
+    doc.setLineWidth((s === 'medium' ? 1.5 : 0.75) * k);
+    doc.setLineDashPattern(s === 'dashed' ? [2.4 * k, 0.9 * k] : [], 0);
+    doc.line(x1, y1, x2, y2);
+  });
+  doc.setLineDashPattern([], 0);
+  // text
+  const pad = 2.6 * k;
+  model.rows.forEach((rr, r) => rr.c.forEach((cell, c) => {
+    if (cell.v === null || cell.v === undefined || cell.v === '') return;
+    const st = D.styles[cell.s]; const mm = mergeOf(c, r);
+    if (mm && (mm[0] !== c || mm[1] !== r)) return;
+    let [c1, r1, c2, r2] = mm || [c, r, c, r];
+    const txt = jtCellText(cell.v, st); if (!txt) return;
+    const size = st.f[1] * k, bold = st.f[2];
+    doc.setFont('Carlito', bold ? 'bold' : 'normal'); doc.setFontSize(size);
+    if (st.c) doc.setTextColor(parseInt(st.c.slice(0, 2), 16), parseInt(st.c.slice(2, 4), 16), parseInt(st.c.slice(4, 6), 16)); else doc.setTextColor(0, 0, 0);
+    const isNum = typeof cell.v === 'number' || cell.v instanceof Date;
+    const h = st.h || (typeof cell.v === 'number' ? 'right' : 'left');
+    // text that doesn't wrap spills into the empty cells beside it, as in Excel
+    if (!mm && !st.w && h === 'left' && !isNum) { while (c2 < D.cols - 1 && (rr.c[c2 + 1].v === null || rr.c[c2 + 1].v === '') && !mergeOf(c2 + 1, r) && jtTextW(txt, st.f[1], bold) * k > (X(c2 + 1) - X(c1)) - 2 * pad) c2++; }
+    const x1 = X(c1), x2 = X(c2 + 1), y1 = Y(r1), y2 = Y(r2 + 1);
+    const lines = st.w ? jtWrap(txt, (x2 - x1 - 2 * pad) / k, st.f[1], bold) : [txt];
+    const lh = st.f[1] * 1.22 * k, blockH = lh * lines.length;
+    let y0 = st.v === 'center' ? (y1 + y2) / 2 - blockH / 2 : st.v === 'top' ? y1 + 1 * k : y2 - blockH - 1.2 * k;
+    lines.forEach((ln, i) => {
+      const by = y0 + lh * i + size * 0.86;
+      if (h === 'center' || h === 'centerContinuous') doc.text(ln, (x1 + x2) / 2, by, { align: 'center' });
+      else if (h === 'right') doc.text(ln, x2 - pad, by, { align: 'right' });
+      else doc.text(ln, x1 + pad, by);
+    });
+  }));
+  // logos
+  jtDorLogoBoxes(imgs).forEach(b => {
+    const x = m.l + b.x * JT_PX * k, y = m.t + b.y * JT_PX * k;
+    doc.addImage(b.img.dataUrl, /image\/png/.test(b.img.dataUrl.slice(0, 30)) ? 'PNG' : 'JPEG', x, y, b.w * JT_PX * k, b.h * JT_PX * k, b.gankco ? 'dor-gankco' : undefined, 'FAST');
+  });
+}
+async function jtDorPdf(r, j, withPhotos) {
+  const doc = await jtDorDoc(); const imgs = await jtDorImages(j);
+  jtDorDraw(doc, jtDorModel(r, j), imgs);
+  doc.setProperties({ title: `Daily Operation Report - ${r.well} - ${fd(r.report_date)}`, author: S.profile?.full_name || '' });
+  // photos only when asked for, on pages after the report
+  const ph = withPhotos ? (r.photos || []) : [];
   if (ph.length) {
     const rows = await q(sb.from('jt_files').select('id,mime,data,caption').in('id', ph.map(p => p.id)));
-    const imgs = (await Promise.all(rows.map(f => dataImage(`data:${f.mime};base64,${f.data}`).then(i => ({ ...i, caption: f.caption })).catch(() => null)))).filter(Boolean);
-    const H = doc.internal.pageSize.getHeight(); const cw = (W - 26) / 2, chh = 78; let y = 0, col = 0;
-    const head = () => { doc.addPage(); doc.setFont('Barlow', 'bold'); doc.setFontSize(10.5); doc.setTextColor(...rgb(PDF_INK.ink)); doc.text(jtTxt(`Photos · ${r.well} · ${fd(r.report_date)} · Report ${r.report_no ?? ''}`), 10, 14); y = 18; col = 0; };
+    const ims = (await Promise.all(rows.map(f => dataImage(`data:${f.mime};base64,${f.data}`).then(i => ({ ...i, caption: f.caption })).catch(() => null)))).filter(Boolean);
+    const W = doc.internal.pageSize.getWidth(), H = doc.internal.pageSize.getHeight(), M = 40; const cw = (W - 2 * M - 16) / 2, chh = 220; let y = 0, col = 0;
+    const head = () => { doc.addPage(); doc.setFont('Carlito', 'bold'); doc.setFontSize(12); doc.setTextColor(0, 0, 0); doc.text(jtTxt(`Photos · ${r.well} · ${fd(r.report_date)} · Report ${r.report_no ?? ''}`), M, M); y = M + 14; col = 0; };
     head();
-    imgs.forEach(im => {
-      if (col === 0 && y + chh > H - 16) head();
-      const k = Math.min(cw / im.w, (chh - 6) / im.h); const iw = im.w * k, ih = im.h * k; const x = 10 + col * (cw + 6);
+    ims.forEach(im => {
+      if (col === 0 && y + chh > H - M) head();
+      const kk = Math.min(cw / im.w, (chh - 18) / im.h); const iw = im.w * kk, ih = im.h * kk; const x = M + col * (cw + 16);
       doc.addImage(im.dataUrl, 'JPEG', x + (cw - iw) / 2, y, iw, ih, undefined, 'FAST');
-      if (im.caption) { doc.setFont('Barlow', 'normal'); doc.setFontSize(8); doc.setTextColor(...rgb(PDF_INK.muted)); doc.text(jtTxt(im.caption).slice(0, 90), x, y + ih + 4); }
+      if (im.caption) { doc.setFont('Carlito', 'normal'); doc.setFontSize(10); doc.setTextColor(80, 80, 80); doc.text(jtTxt(im.caption).slice(0, 90), x, y + ih + 12); }
       if (col === 1) { y += chh; col = 0; } else col = 1;
     });
   }
+  doc.save(jtFile(`DOR - ${r.well} - ${jtShortDate(r.report_date)} ${String(r.report_date).slice(0, 4)}.pdf`));
 }
-async function jtDorPdf(r, j) {
-  const doc = await pdfInit('portrait');
-  await jtDorBuild(doc, r, j, true);
-  jtFooter(doc, `${j.job_no} · Daily Operation Report ${r.report_no ?? ''}`);
-  doc.save(jtFile(`DOR ${r.well} ${r.report_date} (Report ${r.report_no}).pdf`));
+// the PDF button: asks about photos when the report has some
+async function jtDorPdfAsk(id, j) {
+  let r; try { r = await q(sb.rpc('jt_report_get', { p_id: id })); } catch (e) { return toast(niceError(e), true); }
+  const go = async ph => { try { await withProgress('Making the PDF…', () => jtDorPdf(r, j, ph)); } catch (e) { toast(niceError(e), true); } };
+  if (!r.photos?.length) return go(false);
+  modal({ title: 'PDF of the daily report', submit: null, cancel: 'Close', sub: `The report is one page, like the DOR. This report has ${plural(r.photos.length, 'photo')}.`,
+    body: `<div class="actionrow"><button type="button" class="btn primary" id="jt-p1">${ico('pdf')}Report only</button><button type="button" class="btn" id="jt-p2">${ico('pdf')}Report with the photos after it</button></div>`,
+    onOpen: d => { $('#jt-p1', d).onclick = () => { d.close(); go(false); }; $('#jt-p2', d).onclick = () => { d.close(); go(true); }; } });
 }
 
-// ================================================================ DAILY OPERATION REPORTS (Excel: one sheet a day, like the DOR workbook, plus the Operations Breakdown)
-async function jtDorWorkbook(j) {
-  await loadScript('vendor/exceljs.min.js');
-  const X = window.ExcelJS, wb = new X.Workbook(); wb.creator = 'GANKCO Nest';
-  const ids = j.reports.slice().sort((a, b) => a.report_date.localeCompare(b.report_date) || a.well.localeCompare(b.well)).map(r => r.id);
-  const full = []; for (const id of ids) full.push(await q(sb.rpc('jt_report_get', { p_id: id })));
-  const gk = await imageB64('brand/logo-full.png'); const gkId = wb.addImage({ base64: gk.base64, extension: 'png' });
-  const logos = await jtLogoImgs((j.logos || []).map(l => l.id));
-  const logoIds = logos.map(l => ({ id: wb.addImage({ base64: l.dataUrl.split(',')[1], extension: /png/.test(l.dataUrl.slice(0, 30)) ? 'png' : 'jpeg' }), w: l.w, h: l.h }));
-  const thin = { style: 'thin', color: { argb: 'FFBFC1C5' } }; const box = { top: thin, left: thin, bottom: thin, right: thin };
-  const grey = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFEDEEF0' } }; const dark = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF1E1F22' } };
-  const used = {};
-  for (const r of full) {
-    let name = safeSheet(`${new Date(r.report_date + 'T00:00:00').getDate()}-${new Date(r.report_date + 'T00:00:00').getMonth() + 1}-${String(r.report_date).slice(2, 4)}${j.wells.length > 1 ? ' ' + r.well : ''}`);
-    while (used[name]) name = safeSheet(name.slice(0, 28) + ' ' + (used[name] = (used[name] || 1) + 1)); used[name] = 1;
-    const ws = wb.addWorksheet(name, { views: [{ showGridLines: false }], pageSetup: { paperSize: 9, orientation: 'portrait', fitToPage: true, fitToWidth: 1, fitToHeight: 0, margins: { left: .4, right: .4, top: .5, bottom: .5, header: .2, footer: .2 } } });
-    [12, 12, 12, 14, 14, 14, 12, 14].forEach((w, i) => ws.getColumn(i + 1).width = w);
-    ws.getRow(1).height = 46;
-    let lx = 0; logoIds.forEach(l => { const h = 42, w = h * l.w / l.h; ws.addImage(l.id, { tl: { col: lx / 64, row: 0.1 }, ext: { width: w, height: h } }); lx += w + 6; });
-    ws.addImage(gkId, { tl: { col: 6.1, row: 0.25 }, ext: { width: 150, height: 150 * gk.h / gk.w } });
-    ws.mergeCells('C2:F2'); Object.assign(ws.getCell('C2'), { value: 'Daily Operation Report' }); ws.getCell('C2').font = { name: 'Calibri', size: 16, bold: true }; ws.getCell('C2').alignment = { horizontal: 'center' };
-    let row = 4;
-    const put = (cells) => { cells.forEach(([addr, val, o = {}]) => { const c = ws.getCell(addr); c.value = val ?? ''; c.border = box; c.alignment = { vertical: 'middle', wrapText: true, ...(o.al || {}) }; if (o.lbl) { c.fill = grey; c.font = { bold: true }; } if (o.merge) ws.mergeCells(o.merge); }); };
-    put([[`A${row}`, 'Client', { lbl: 1 }], [`B${row}`, j.client?.name, { merge: `B${row}:D${row}` }], [`E${row}`, 'Field', { lbl: 1 }], [`F${row}`, r.well_field || j.field], [`G${row}`, 'Well', { lbl: 1 }], [`H${row}`, r.well]]); row++;
-    put([[`A${row}`, 'Client Rep(s)', { lbl: 1 }], [`B${row}`, r.client_reps, { merge: `B${row}:D${row}` }], [`E${row}`, 'GANKCO Rep', { lbl: 1 }], [`F${row}`, r.gankco_rep, { merge: `F${row}:H${row}` }]]); row++;
-    put([[`A${row}`, 'Report No', { lbl: 1 }], [`B${row}`, r.report_no], [`C${row}`, 'Date', { lbl: 1 }], [`D${row}`, new Date(r.report_date + 'T00:00:00Z'), {}], [`E${row}`, 'Project / Operation', { lbl: 1 }], [`F${row}`, j.project, { merge: `F${row}:H${row}` }]]);
-    ws.getCell(`D${row}`).numFmt = 'dd-mmm-yy'; row++;
-    put([[`A${row}`, 'Rig Name', { lbl: 1 }], [`B${row}`, j.rig_name || 'N/A'], [`C${row}`, 'Rig Owner', { lbl: 1 }], [`D${row}`, j.rig_owner || 'N/A'], [`E${row}`, 'Rig Type', { lbl: 1 }], [`F${row}`, j.rig_type || 'N/A'], [`G${row}`, 'Job No', { lbl: 1 }], [`H${row}`, j.job_no]]); row += 2;
-    ws.mergeCells(`A${row}:H${row}`); Object.assign(ws.getCell(`A${row}`), { value: 'GANKCO HSE Statistics', fill: dark, font: { bold: true, color: { argb: 'FFFFFFFF' } } }); row++;
-    put([[`A${row}`, 'Total Man Hr', { lbl: 1 }], [`B${row}`, r.man_hours == null ? '' : +r.man_hours], [`C${row}`, 'Days Without LTI', { lbl: 1 }], [`D${row}`, r.lti_days], [`E${row}`, 'TRI', { lbl: 1 }], [`F${row}`, r.tri ?? 0], [`G${row}`, r.hse_comment || 'No incident / accident', { merge: `G${row}:H${row}` }]]); row += 2;
-    put([[`A${row}`, 'Daily Operations Summary (24hr)', { lbl: 1, merge: `A${row}:B${row}` }], [`C${row}`, r.summary, { merge: `C${row}:H${row}` }]]);
-    ws.getRow(row).height = Math.max(30, Math.ceil(String(r.summary || '').length / 90) * 15); row += 2;
-    ws.mergeCells(`A${row}:H${row}`); Object.assign(ws.getCell(`A${row}`), { value: 'Operations Breakdown (24 hr)', fill: dark, font: { bold: true, color: { argb: 'FFFFFFFF' } } }); row++;
-    put([[`A${row}`, 'Time from', { lbl: 1 }], [`B${row}`, 'Time to', { lbl: 1 }], [`C${row}`, 'Total (hr)', { lbl: 1 }], [`D${row}`, 'Operation Description', { lbl: 1, merge: `D${row}:H${row}` }]]); row++;
-    let tot = 0;
-    (r.ops || []).forEach(o => { const m = jtMins(o.from, o.to) || 0; tot += m; put([[`A${row}`, o.from, { al: { horizontal: 'center' } }], [`B${row}`, o.to, { al: { horizontal: 'center' } }], [`C${row}`, jtHm(m), { al: { horizontal: 'center' } }], [`D${row}`, o.desc, { merge: `D${row}:H${row}` }]]);
-      ws.getRow(row).height = Math.max(15, Math.ceil(String(o.desc || '').length / 70) * 15); row++; });
-    put([[`A${row}`, 'Total', { lbl: 1, merge: `A${row}:B${row}` }], [`C${row}`, jtHm(tot), { al: { horizontal: 'center' } }], [`D${row}`, '', { merge: `D${row}:H${row}` }]]); row += 2;
-    if ((j.groups || []).length) { put([[`A${row}`, 'Equipment Status', { lbl: 1, merge: `A${row}:B${row}` }], ...(j.groups || []).slice(0, 6).map((g, i) => [`${String.fromCharCode(67 + i)}${row}`, `${g}: ${JT_EQ[r.equipment?.[g]]?.[1] || '—'}`])]); row += 2; }
-    put([[`A${row}`, 'General Comment/Observations', { lbl: 1, merge: `A${row}:B${row}` }], [`C${row}`, r.comments, { merge: `C${row}:H${row}` }]]); row++;
-    put([[`A${row}`, 'Look Ahead', { lbl: 1, merge: `A${row}:B${row}` }], [`C${row}`, r.look_ahead, { merge: `C${row}:H${row}` }]]); row += 2;
-    put([[`A${row}`, 'POB', { lbl: 1, merge: `A${row}:C${row}` }], [`D${row}`, 'Days on Well', { lbl: 1 }], [`E${row}`, 'Report Page', { lbl: 1 }]]); row++;
-    put([[`A${row}`, 'Client', { lbl: 1 }], [`B${row}`, 'GANKCO', { lbl: 1 }], [`C${row}`, 'Others', { lbl: 1 }], [`D${row}`, r.report_no], [`E${row}`, `${r.report_no} of ${r.well_reports ?? r.report_no}`]]); row++;
-    put([[`A${row}`, r.pob_client ?? ''], [`B${row}`, r.pob_gankco ?? ''], [`C${row}`, r.pob_others ?? '']]);
-  }
-  // the Operations Breakdown, as the last sheet
-  const bd = await q(sb.rpc('jt_breakdown', { p_job: j.id }));
-  jtBreakdownSheet(wb, j, bd, gkId, gk);
-  const buf = await wb.xlsx.writeBuffer();
-  saveBlob(new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }), jtFile(`General DOR - ${j.job_no} ${j.field || ''}.xlsx`));
-}
 function jtBreakdownSheet(wb, j, rows, gkId, gk) {
   const ws = wb.addWorksheet('Operations Breakdown', { views: [{ showGridLines: false, state: 'frozen', ySplit: 4 }], pageSetup: { paperSize: 9, orientation: 'landscape', fitToPage: true, fitToWidth: 1, fitToHeight: 0 } });
   const G = j.groups || [];

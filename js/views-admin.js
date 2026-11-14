@@ -301,12 +301,13 @@ ROUTES.team = {
         <dt>Inventory · Staff</dt><dd>Day-to-day work in the teams their access covers (Eng &amp; Ops, QHSE or both): materials requests, returns, receiving, moving, monthly counts and certificates. Quantity corrections go to the line’s admin.</dd>
         <dt>Inventory · Viewer</dt><dd>Sees the Overview, stock, Reports and Sign-offs (with prices) and can add and edit jobs in the Job planner. Can’t raise requests, approve or count.</dd>
         <dt>JobTrack · Admin</dt><dd>Operations managers. Set up jobs, clients, crew and ticket items; see every job; review daily reports; approve tickets (or the approvers chosen in JobTrack settings); JobTrack settings.</dd>
-        <dt>JobTrack · Engineer</dt><dd>Daily Operation Reports, tickets and reimbursables on the jobs they’re crew on (or lead). Sees only those jobs. No prices anywhere in JobTrack.</dd>
+        <dt>JobTrack · Engineer</dt><dd>Daily Operation Reports, tickets and reimbursables on the jobs they’re crew on (or lead). Sees only those jobs. Can start a job (and lead it) unless JobTrack settings say only operations managers can. The HSE person on a crew fills the HSE part of each report. No prices anywhere in JobTrack.</dd>
         <dt>JobTrack · Viewer</dt><dd>Management. Sees every job, report, breakdown and ticket and downloads them. Can’t change anything.</dd>
+        <dt>JobTrack testing</dt><dd>While JobTrack is in testing (Nest settings → Apps in testing), only its testers can open it.</dd>
         <dt>Purchase Order · Staff</dt><dd>Raises POs with no approval step, and revises, cancels and closes their own. Only you can delete a PO.</dd>
         <dt>Purchase Order · Viewer</dt><dd>Sees the Overview and every PO, and downloads them. Can’t change anything.</dd>
         <dt>PFI &amp; Quote</dt><dd>Admin or Staff. The app is still being built; switching it on now just gets people ready.</dd>
-        <dt>PeopleCore</dt><dd>On or off. Roles inside it come from PeopleCore → System control. It shows as under construction until you open it (Nest settings).</dd>
+        <dt>PeopleCore</dt><dd>On or off. Roles inside it come from PeopleCore → System control. It shows as under construction while it’s in testing (Nest settings → Apps in testing).</dd>
         <dt>Developer</dt><dd>Everything, in every app. One Developer, with an optional backup. Hand it over with <b>Transfer Developer</b>.</dd></dl></div></section>`;
   },
   bind(main) {
@@ -478,9 +479,9 @@ ROUTES.settings = {
     if (!isSuper()) return topbar('Nest settings') + '<div class="notice">Only the Developer can change settings.</div>';
     await loadLookups();
     return topbar('Nest settings', 'These apply to every app. Open a section to change it. Each app’s own settings are in that app’s menu: Inventory settings, and PO settings in the Purchase Order app.') +
-      `${typeof companyPanel === 'function' ? companyPanel() : ''}${await svcPanel()}${await alertsPanel()}${maintPanel()}${typeof peopleBuildPanel === 'function' ? peopleBuildPanel() : ''}${backupPanel()}`;
+      `${typeof companyPanel === 'function' ? companyPanel() : ''}${await svcPanel()}${await alertsPanel()}${maintPanel()}${appsTestingPanel()}${backupPanel()}`;
   },
-  bind(main) { if (typeof bindCompanyPanel === 'function') bindCompanyPanel(main); bindSvcPanel(main); bindBackup(main); bindAlertsPanel(main); bindMaintPanel(main); if (typeof bindPeopleBuild === 'function') bindPeopleBuild(main);
+  bind(main) { if (typeof bindCompanyPanel === 'function') bindCompanyPanel(main); bindSvcPanel(main); bindBackup(main); bindAlertsPanel(main); bindMaintPanel(main); bindAppsTesting(main);
     settingsAccordion(main, 'settings');
     if (location.hash.includes('#svc')) setTimeout(() => $('#svc', main)?.scrollIntoView({ block: 'start' }), 50); }
 };

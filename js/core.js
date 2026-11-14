@@ -101,7 +101,11 @@ const setting = (k, d) => S.settings[k] ?? d;
 // 3.0.3: while viewing as a role, apps follow that role (Inventory and PO; PeopleCore only for the Developer until go-live)
 const appAllowed = app => viewAsOn() ? (S.viewAs.role === 'superadmin' || !!S.viewAs[app]) : (realSuper() || (realRole() === 'staff' && (S.profile?.apps || []).includes(app)));
 // 3.0.4: PeopleCore is under construction until the Developer opens it (the Developer and the testers they tick can go in)
-const peopleBuilding = () => { const c = setting('people_construction', null); return !!(c && c.on) && !realSuper() && !((c.testers || []).includes(S.profile?.id)); };
+// 3.0.9: PeopleCore and JobTrack can be in testing; only the Developer and that app's testers go in (Nest settings → Apps in testing)
+const appTestOn = app => { const t = setting('app_testing', null); return t ? !!t[app]?.on : app === 'people' && !!setting('people_construction', null)?.on; };
+const appTesting = app => { const t = setting('app_testing', null); const c = t ? t[app] : app === 'people' ? setting('people_construction', null) : null;
+  return !!(c && c.on) && !realSuper() && !((c.testers || []).includes(S.profile?.id)); };
+const peopleBuilding = () => appTesting('people');
 const ADMIN_ROUTES = ['team', 'audit', 'settings', 'devtools'];
 
 // "View as" is read-only: block every write while it's on
@@ -229,6 +233,7 @@ const I = {
   undo: '<path d="M9 14L4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11"/>',
   chat: '<path d="M21 12a8 8 0 0 1-11.6 7.1L4 20l1.1-4.2A8 8 0 1 1 21 12z"/>',
   target: '<circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="5"/><circle cx="12" cy="12" r="1.2" fill="currentColor"/>',
+  copy: '<rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/>'
 };
 const ico = n => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${I[n]}</svg>`;
 
@@ -593,6 +598,7 @@ function canSignReport(r) {
 }
 
 function navItems() {
+  if (S.shellApp === 'jobtrack' && appTesting('jobtrack')) return { main: [['', 'Nest home', 'grid']], setup: [] };
   if (S.shellApp === 'po' && typeof poNav === 'function') return poNav();
   if (S.shellApp === 'jobtrack' && typeof jtNav === 'function') return jtNav();
   if (S.shellApp === 'people' && peopleBuilding()) return { main: [['', 'Nest home', 'grid']], setup: [] };
@@ -629,7 +635,7 @@ function shell() {
     <main id="main"></main>
     <button class="bell" id="bell" aria-label="Notifications">${ico('bell')}<span class="bell-count" hidden></span></button>
     ${meBtn()}
-    ${S.shellApp === 'po' && typeof poBottomBar === 'function' ? poBottomBar() : S.shellApp === 'jobtrack' && typeof jtBottomBar === 'function' ? jtBottomBar() : S.shellApp === 'people' && !peopleBuilding() && typeof peopleBottomBar === 'function' ? peopleBottomBar() : S.shellApp === 'admin' ? `<nav class="bottombar">
+    ${S.shellApp === 'po' && typeof poBottomBar === 'function' ? poBottomBar() : S.shellApp === 'jobtrack' && !appTesting('jobtrack') && typeof jtBottomBar === 'function' ? jtBottomBar() : S.shellApp === 'people' && !peopleBuilding() && typeof peopleBottomBar === 'function' ? peopleBottomBar() : S.shellApp === 'admin' ? `<nav class="bottombar">
       ${isSuper() ? `<a href="#/team" data-r="team">${ico('users')}Team</a><a href="#/devtools" data-r="devtools">${ico('wrench')}Tools</a><a href="#/settings" data-r="settings">${ico('gear')}Settings</a>` : ''}
       <a href="#/account" data-r="account">${ico('user')}Account</a><a href="#/" data-r="home">${ico('grid')}Apps</a></nav>` : `<nav class="bottombar">
       <a href="#/dashboard" data-r="dashboard">${ico('home')}Overview</a>
@@ -648,7 +654,9 @@ function setNav(r) { $$('[data-r]').forEach(a => a.classList.toggle('on', a.data
 
 const ROUTES = {};
 const APP_NAMES = { inventory: 'Inventory', po: 'Purchase Order', people: 'PeopleCore', jobtrack: 'JobTrack' };
-ROUTES.building = { load: async () => `<div class="build-screen"><div class="build-card"><span class="build-ico">${ico('wrench')}</span><div><span class="maint-pill">PeopleCore · under construction</span></div>
+ROUTES.building = { load: async () => S.shellApp === 'jobtrack' ? `<div class="build-screen"><div class="build-card"><span class="build-ico">${ico('wrench')}</span><div><span class="maint-pill">JobTrack · being tested</span></div>
+    <h1>JobTrack is being tested</h1><p>Field jobs, daily operation reports and job tickets open here soon. Nothing for you to do yet.</p>
+    <a class="btn primary" href="#/">Back to Nest home</a></div></div>` : `<div class="build-screen"><div class="build-card"><span class="build-ico">${ico('wrench')}</span><div><span class="maint-pill">PeopleCore · under construction</span></div>
     <h1>PeopleCore is being built</h1><p>Your HR self-service (profile, leave, requests, approvals and the company directory) opens here soon. Nothing for you to do yet.</p>
     <a class="btn primary" href="#/">Back to Nest home</a></div></div>` };
 ROUTES.noapp = { load: async () => topbar(APP_NAMES[S.shellApp] || 'Nest') + `<div class="notice">You don’t have access to ${esc(APP_NAMES[S.shellApp] || 'this app')}. Ask the Developer if you need it.</div><a class="btn" href="#/">Back to Nest home</a>` };
@@ -669,7 +677,7 @@ async function render(opts = {}) {
   // 2.8: an app someone doesn't have can't be opened, even by typing its address
   const blocked = (app === 'inventory' || app === 'people' || app === 'jobtrack') && !appAllowed(app);
   // 3.0.4: PeopleCore is under construction for everyone but the Developer and the testers they tick
-  const view = blocked ? ROUTES.noapp : app === 'people' && peopleBuilding() ? ROUTES.building : (ROUTES[r] || ROUTES.dashboard);
+  const view = blocked ? ROUTES.noapp : (app === 'people' || app === 'jobtrack') && appTesting(app) ? ROUTES.building : (ROUTES[r] || ROUTES.dashboard);
   setNav(r === 'item' ? 'inventory' : r === 'job' ? 'jobs' : r === 'po' ? (parts[1] && isNaN(+parts[1]) ? 'po/' + parts[1] : 'po') : r === 'jt' ? (typeof jtNavKey === 'function' ? jtNavKey(parts) : 'jt') : r === 'people' ? (typeof pcNavKey === 'function' ? pcNavKey(parts) : typeof hrNavKey === 'function' ? hrNavKey(parts) : 'people') : r);
   let main = $('#main'); const seq = ++renderSeq;
   const y = window.scrollY;
@@ -767,11 +775,12 @@ async function renderLauncher() {
       <p>Where would you like to go?</p></div></section>
     <section class="tiles">${launcherTiles([
       ['people', appAllowed('people') && peopleBuilding() ? appTile('people', null, 'users', 'PeopleCore', 'Your HR self-service: profile, leave, requests, approvals and the company directory.', '<span class="t-meta">Under construction</span><span class="t-badge build">Under construction</span>')
-        : appAllowed('people') ? appTile('people', '#/people', 'users', 'PeopleCore', 'Your HR self-service: profile, leave, requests, approvals and the company directory.', `<span class="t-meta" id="hrMeta">Open</span>${setting('people_construction', null)?.on ? '<span class="t-badge build">Under construction · testing</span>' : ''}`, true)
+        : appAllowed('people') ? appTile('people', '#/people', 'users', 'PeopleCore', 'Your HR self-service: profile, leave, requests, approvals and the company directory.', `<span class="t-meta" id="hrMeta">Open</span>${appTestOn('people') ? '<span class="t-badge build">Under construction · testing</span>' : ''}`, true)
         : setting('people_live', false) === true ? lockedTile('users', 'PeopleCore', 'Your HR self-service: profile, leave, requests, approvals and the company directory.')
-        : appTile('people', null, 'users', 'PeopleCore', 'Your HR self-service: profile, leave, requests, approvals and the company directory.', `<span class="t-meta">${setting('people_construction', null)?.on ? 'Under construction' : 'Coming soon'}</span>`)],
+        : appTile('people', null, 'users', 'PeopleCore', 'Your HR self-service: profile, leave, requests, approvals and the company directory.', `<span class="t-meta">${appTestOn('people') ? 'Under construction' : 'Coming soon'}</span>`)],
       ['inventory', appAllowed('inventory') ? appTile('inventory', '#/dashboard', 'box', 'Inventory', 'Equipment, stock, materials requests, monthly counts and reports.', '<span class="t-meta" id="invMeta">Open</span>', true) : lockedTile('box', 'Inventory', 'Equipment, stock, materials requests, monthly counts and reports.')],
-      ['jobtrack', appAllowed('jobtrack') ? appTile('jobtrack', '#/jt', 'derrick', 'JobTrack', 'Field jobs, daily operation reports and job tickets.', '<span class="t-meta" id="jtMeta">Open</span>', true) : lockedTile('derrick', 'JobTrack', 'Field jobs, daily operation reports and job tickets.')],
+      ['jobtrack', appAllowed('jobtrack') && appTesting('jobtrack') ? appTile('jobtrack', null, 'derrick', 'JobTrack', 'Field jobs, daily operation reports and job tickets.', '<span class="t-meta">Being tested</span><span class="t-badge build">Being tested</span>')
+        : appAllowed('jobtrack') ? appTile('jobtrack', '#/jt', 'derrick', 'JobTrack', 'Field jobs, daily operation reports and job tickets.', `<span class="t-meta" id="jtMeta">Open</span>${appTestOn('jobtrack') ? '<span class="t-badge build">Testing</span>' : ''}`, true) : lockedTile('derrick', 'JobTrack', 'Field jobs, daily operation reports and job tickets.')],
       ['po', typeof poCanView === 'function' && poCanView() ? appTile('po', '#/po/overview', 'audit', 'Purchase Order', 'Raise, sign and track purchase orders to OEMs and suppliers.', '<span class="t-meta" id="poMeta">Open</span>', true) : lockedTile('audit', 'Purchase Order', 'Raise, sign and track purchase orders to OEMs and suppliers.')],
       ['proforma', appTile('proforma', null, 'chart', 'Proforma Invoice &amp; Quote', 'Prepare quotes and proforma invoices for clients.', '<span class="t-meta">Coming later</span>')]])}
     </section>

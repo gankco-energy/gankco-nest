@@ -2028,3 +2028,29 @@ a.rp-bign:hover { color: var(--brand); }
   .jt-tk input.jt-n { width: 58px; }
 }
 .jt-f { font-weight: 600; font-size: 14px; margin-bottom: 12px; } .jt-f > .hint { display: block; font-weight: 400; color: var(--muted); font-size: 13px; }
+
+/* 3.0.9 JobTrack: start times only, the HSE part, WhatsApp, apps in testing */
+.jt-op { grid-template-columns: 124px 92px 1fr auto; }
+.jt-op .jt-hrs { text-align: left; padding-left: 2px; white-space: nowrap; }
+.jt-opbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 4px; }
+.jt-end { display: inline-flex; align-items: center; gap: 6px; font-size: 14px; font-weight: 600; flex-wrap: wrap; margin: 0 0 0 8px; }
+.jt-end input { width: 112px; margin: 0; } .jt-end .hint { font-weight: 400; color: var(--muted); font-size: 12.5px; width: 100%; }
+.jt-hse.locked .body { background: #FAFAFB; }
+.jt-hse.mine { border-color: #1F8A5B; box-shadow: 0 0 0 2px rgba(31,138,91,.12); }
+.jt-hsechk { white-space: nowrap; margin: 0; font-size: 13.5px; }
+.jt-crewrow { grid-template-columns: 1.3fr 1.1fr 1.2fr .9fr auto auto; }
+.jt-ro { display: block; font-weight: 500; padding: 9px 0 2px; }
+.jt-wagrid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.3fr); gap: 16px; }
+.jt-wagrid .jt-wa { min-height: 300px; font-size: 13.5px; line-height: 1.45; }
+.jt-wadays { max-height: 180px; overflow: auto; margin-top: 8px; }
+.apptest td, .apptest th { text-align: center; vertical-align: middle; }
+.apptest td:first-child, .apptest th:first-child { text-align: left; }
+.apptest .at-seg { display: inline-flex; } .apptest .at-seg button { padding: 6px 10px; font-size: 13px; }
+.at-chk { margin: 0; justify-content: center; } .at-chk input { width: 18px; height: 18px; }
+.sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+@media (max-width: 760px) {
+  .jt-op { grid-template-columns: 124px 1fr auto; } .jt-op .jt-hrs { grid-column: 2; grid-row: 1; padding-top: 9px; } .jt-op .jt-desc { grid-column: 1 / 3; grid-row: 2; } .jt-op [data-oprm] { grid-column: 3; grid-row: 1; }
+  .jt-end { margin: 6px 0 0; width: 100%; }
+  .jt-wagrid { grid-template-columns: 1fr; }
+  .jt-crewrow { grid-template-columns: 1fr 1fr; } .jt-crewrow .jt-hsechk { justify-self: start; }
+}

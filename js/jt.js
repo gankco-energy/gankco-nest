@@ -1,4 +1,4 @@
-/* GANKCO Nest 3.0.8 — JobTrack: field jobs, Daily Operation Reports, the Operations Breakdown and unpriced tickets.
+/* GANKCO Nest 3.0.9 — JobTrack: field jobs, Daily Operation Reports, the Operations Breakdown and unpriced tickets.
    No prices anywhere in JobTrack. Roles: Admin (operations managers), Engineer (crew), Viewer (management). */
 'use strict';
 
@@ -15,6 +15,8 @@ S.jt = { cfg: null, clients: [], items: [], at: 0, f: { view: 'active', q: '' },
 const jtRole = () => appRole('jobtrack');
 const jtAdmin = () => jtRole() === 'admin' && !S.viewAs;
 const jtWriter = () => ['admin', 'engineer'].includes(jtRole()) && !S.viewAs;
+// 3.0.9: engineers can start a job (JobTrack settings → Jobs), and they lead it
+const jtCanStart = () => !S.viewAs && !!S.jt.cfg?.can_start;
 const jtGroups = () => S.jt.cfg?.groups || ['Slickline', 'TTSC', 'Crane'];
 const jtClientName = id => { const c = S.jt.clients.find(x => x.id === +id); return c ? (c.short_name || c.name) : '—'; };
 const jtChip = (map, k) => chip(map[k]?.[0] || 'muted', map[k]?.[1] || k);
@@ -53,9 +55,10 @@ async function jtTileMeta(el) {
     const o = await q(sb.rpc('jt_overview'));
     const active = o.jobs.filter(j => ['mobilised', 'on_location'].includes(j.status));
     const bits = [o.to_approve.length ? plural(o.to_approve.length, 'ticket') + ' to approve' : '', o.returned.length ? `${o.returned.length} sent back to you` : '',
+      (o.hse_todo || []).length ? plural(o.hse_todo.length, 'HSE section') + ' to fill' : '',
       active.length ? plural(active.length, 'job') + ' on location' : ''].filter(Boolean);
     el.textContent = bits.join(' · ') || 'Open';
-    if (o.to_approve.length || o.returned.length) el.classList.add('hot');
+    if (o.to_approve.length || o.returned.length || (o.hse_todo || []).length) el.classList.add('hot');
   } catch (e) { el.textContent = 'Open'; }
 }
 
@@ -79,13 +82,14 @@ const jtOverview = {
     const active = o.jobs.filter(j => ['mobilised', 'on_location'].includes(j.status));
     const missing = active.filter(j => !j.today_reports);
     return topbar('JobTrack', 'Field jobs, daily operation reports and job tickets. No prices here: pricing happens in PFI & Quote.',
-        `${jtAdmin() ? `<button class="btn" id="jt-newjob">${ico('plus')}New job</button>` : ''}${jtWriter() ? `<a class="btn tagbtn" href="#/jt/report/new">${ico('plus')}New daily report</a>` : ''}`) +
+        `${jtCanStart() ? `<button class="btn" id="jt-newjob">${ico('plus')}New job</button>` : ''}${jtWriter() ? `<a class="btn tagbtn" href="#/jt/report/new">${ico('plus')}New daily report</a>` : ''}`) +
       `<div class="board b4">
         <a class="kpi" href="#/jt/jobs"><div class="n">${active.length}</div><div class="l">Jobs on location</div></a>
         <div class="kpi ${missing.length ? 'warn' : ''}"><div class="n">${missing.length}</div><div class="l">No daily report yet today</div></div>
         <div class="kpi ${o.to_approve.length ? 'warn' : ''}"><div class="n">${o.to_approve.length}</div><div class="l">Tickets to approve${S.jt.cfg?.can_approve ? '' : '<span class="sub"> (approvers only)</span>'}</div></div>
         <div class="kpi ${o.returned.length ? 'bad' : ''}"><div class="n">${o.returned.length}</div><div class="l">Sent back to you</div></div></div>
-      ${o.returned.length || o.to_approve.length || (jtAdmin() && o.to_review) ? `<section class="panel"><header><h2>Needs you</h2></header><ul class="list">
+      ${o.returned.length || o.to_approve.length || (o.hse_todo || []).length || (jtAdmin() && o.to_review) ? `<section class="panel"><header><h2>Needs you</h2></header><ul class="list">
+        ${(o.hse_todo || []).map(x => `<li><a class="main" href="#/jt/report/${x.id}"><div class="name">HSE section to fill: ${esc(x.label)} ${chip('pending', 'HSE')}</div><div class="sub">${esc(x.job_no)} · the report can’t be sent until you fill it</div></a></li>`).join('')}
         ${o.returned.map(x => `<li><a class="main" href="#/jt/${x.type}/${x.id}"><div class="name">${x.type === 'report' ? 'Daily report' : 'Ticket'} ${esc(x.label)} ${chip('overdue', 'Sent back')}</div><div class="sub">${esc(x.note || '')}</div></a></li>`).join('')}
         ${o.to_approve.map(x => `<li><a class="main" href="#/jt/ticket/${x.id}"><div class="name">${esc(x.ticket_no)} ${chip('pending', 'To approve')}</div><div class="sub">${esc(x.title || '')} · sent by ${esc(x.by || '')} ${fdt(x.at)}</div></a></li>`).join('')}
         ${jtAdmin() && o.to_review ? `<li><a class="main" href="#/jt/jobs"><div class="name">${plural(o.to_review, 'daily report')} to review</div><div class="sub">Open a job and look for reports marked Sent.</div></a></li>` : ''}
@@ -95,7 +99,7 @@ const jtOverview = {
           <div class="sub">${esc(j.client || '')}${j.project ? ' · ' + esc(j.project) : ''}${j.field ? ' · ' + esc(j.field) : ''}${j.lead ? ' · lead ' + esc(j.lead) : ''}</div>
           <div class="sub">${j.last_report ? 'Last report ' + fd(j.last_report) : 'No reports yet'}${['mobilised', 'on_location'].includes(j.status) ? (j.today_reports ? ' · ' + chip('ok', 'Today’s report in') : ' · ' + chip('pending', 'No report yet today')) : ''}${j.drafts ? ` · ${plural(j.drafts, 'draft')}` : ''}</div></a>
           ${jtWriter() && ['mobilised', 'on_location'].includes(j.status) ? `<div class="end"><a class="btn small" href="#/jt/report/new?job=${j.id}">${ico('plus')}Today’s report</a></div>` : ''}</li>`).join('')}</ul>`
-          : `<div class="empty">No jobs yet.${jtAdmin() ? ' Press <b>New job</b> to set one up.' : ' An operations manager sets jobs up and adds you to the crew.'}</div>`}</section>`;
+          : `<div class="empty">No jobs yet.${jtCanStart() ? ' Press <b>New job</b> to set one up.' : ' An operations manager sets jobs up and adds you to the crew.'}</div>`}</section>`;
   },
   bind(main) { const b = $('#jt-newjob', main); if (b) b.onclick = () => jtJobForm(); }
 };
@@ -108,7 +112,7 @@ const jtJobs = {
     const people = Object.fromEntries((S.jt.cfg?.people || []).map(p => [p.id, p.name]));
     this.rows = jobs.map(j => ({ ...j, last: last[j.id] || null, client: jtClientName(j.client_id), lead: people[j.lead_id] || '' }));
     const f = S.jt.f;
-    return topbar('Jobs', 'Every job: its wells, crew, daily reports and tickets.', jtAdmin() ? `<button class="btn tagbtn" id="jt-newjob">${ico('plus')}New job</button>` : '') +
+    return topbar('Jobs', 'Every job: its wells, crew, daily reports and tickets.', jtCanStart() ? `<button class="btn tagbtn" id="jt-newjob">${ico('plus')}New job</button>` : '') +
       `<section class="panel"><div class="filters body">
         <input type="search" id="jt-q" placeholder="Search job number, client, field or project" value="${esc(f.q)}" autocomplete="off">
         <div class="seg" id="jt-seg">${[['active', 'Active'], ['planned', 'Planned'], ['on', 'Mobilised & on location'], ['closed', 'Demobilised & closed'], ['all', 'All']].map(([k, l]) => `<button type="button" data-v="${k}" class="${f.view === k ? 'on' : ''}">${l}</button>`).join('')}</div></div>
@@ -132,37 +136,59 @@ const jtJobs = {
   }
 };
 
-// a job's details (Admins)
+// a job's details: operations managers, an engineer starting a job (they lead it), or the job's lead
 async function jtLines() { if (!S.jt.lines) S.jt.lines = await q(sb.from('po_service_lines').select('*').order('sort')).catch(() => []); return S.jt.lines; }
+const JT_WA_DEFAULT = 'Update on {well} {job type} Operation Update - {field}';
 async function jtJobForm(j) {
+  await jtLoad(!j);
   const lines = await jtLines(); const cfg = S.jt.cfg; const groups = [...new Set([...jtGroups(), ...(j?.groups || [])])];
-  const engineers = (cfg.people || []).filter(p => p.role);
+  const admin = jtAdmin(); const engineers = (cfg.people || []).filter(p => p.role);
   const majors = lines.filter(l => !l.parent_id && l.active !== false);
   const lineOpts = majors.map(m => `<optgroup label="${esc((m.code ? m.code + ' · ' : '') + m.name)}">${opt(m.id, (m.code ? m.code + ' · ' : '') + m.name, j?.line_id)}${lines.filter(s => s.parent_id === m.id && s.active !== false).map(s => opt(s.id, '— ' + s.name, j?.line_id)).join('')}</optgroup>`).join('');
+  const others = j ? [] : await q(sb.from('jt_jobs').select('id,job_no,project,field').order('seq', { ascending: false }).limit(60)).catch(() => []);
+  const next = `GES-JT-OPR-${String(cfg.next_job || 1).padStart(4, '0')}-${new Date().getFullYear()}`;
   return modal({ title: j ? 'Edit ' + j.job_no : 'New job', wide: true, submit: j ? 'Save' : 'Create job',
-    sub: j ? '' : 'The job number is given when you create it (GES-JT-OPR-0001-2026 and so on). You add wells, crew and ticket items on the job page.',
-    body: `<div class="row2"><label class="f">Client<select name="client_id" required><option value="">Choose…</option>${S.jt.clients.filter(c => c.active || c.id === j?.client_id).map(c => opt(c.id, c.short_name ? `${c.short_name} (${c.name})` : c.name, j?.client_id)).join('')}</select>
-          <span class="hint">Not listed? Add it under Clients.</span></label>
-        <label class="f">Lead engineer (GANKCO rep)<select name="lead_id"><option value="">Choose…</option>${engineers.map(p => opt(p.id, p.name + (p.title ? ' · ' + p.title : ''), j?.lead_id)).join('')}</select><span class="hint">People with JobTrack. They’re added to the crew.</span></label></div>
+    sub: j ? '' : `This job will be <b>${esc(next)}</b>. You add wells, crew and ticket items on the job page.${admin ? '' : ' You’ll be its lead engineer, and the operations managers are told.'}`,
+    body: `<div class="row2"><label class="f">Client<select name="client_id" required><option value="">Choose…</option>${S.jt.clients.filter(c => c.active || c.id === j?.client_id).map(c => opt(c.id, c.short_name ? `${c.short_name} (${c.name})` : c.name, j?.client_id)).join('')}
+            ${!j && (admin || jtCanStart()) ? '<option value="__new">+ A new client…</option>' : ''}</select>
+          <input name="new_client" placeholder="Client name as it goes on the reports" class="mt" hidden><span class="hint">${admin ? 'Logos and details are under Clients.' : 'Not listed? Choose “A new client”. An operations manager adds its logos.'}</span></label>
+        ${admin ? `<label class="f">Lead engineer (GANKCO rep)<select name="lead_id"><option value="">Choose…</option>${engineers.map(p => opt(p.id, p.name + (p.title ? ' · ' + p.title : ''), j?.lead_id)).join('')}</select><span class="hint">People with JobTrack. They’re added to the crew.</span></label>`
+          : `<div class="f">Lead engineer<b class="jt-ro">${esc(j ? j.lead_name || '—' : S.profile.full_name || 'You')}</b><span class="hint">${j ? 'An operations manager can hand the job to someone else.' : 'You lead the jobs you start.'}</span></div>`}</div>
       <div class="row2"><label class="f">Project / operation<input name="project" value="${esc(j?.project || '')}" placeholder="Thru-Tubing Screen Hang-Off"></label>
-        <label class="f">Job type<input name="job_type" value="${esc(j?.job_type || '')}" placeholder="Thru Tubing Sand Screen Installation"></label></div>
-      <div class="row2"><label class="f">Field<input name="field" value="${esc(j?.field || '')}" placeholder="Uzere West"></label>
+        <label class="f">Job type<input name="job_type" value="${esc(j?.job_type || '')}" placeholder="TTSHO"></label></div>
+      <div class="row2"><label class="f">Field<input name="field" value="${esc(j?.field || '')}" placeholder="OML30"></label>
         <label class="f">Service line<select name="line_id"><option value="">—</option>${lineOpts}</select></label></div>
       <div class="row2"><label class="f">Client PO / call-off number<input name="client_po" value="${esc(j?.client_po || '')}"></label>
         <label class="f">Contract reference<input name="contract_ref" value="${esc(j?.contract_ref || '')}"></label></div>
       <label class="f">Client rep(s)<input name="client_reps" value="${esc(j?.client_reps || '')}" placeholder="Names, as on the daily report"></label>
+      <label class="f">WhatsApp title<input name="wa_title" value="${esc(j?.wa_title || '')}" placeholder="${esc(JT_WA_DEFAULT)}">
+        <span class="hint">The first line of the WhatsApp update. {well} becomes the well’s name, {job type} and {field} this job’s. Leave it blank for: ${esc(JT_WA_DEFAULT)}</span></label>
       <div class="f jt-f">Equipment groups<span class="hint">Each day’s report sets these to Op, Stdby, Mob, Demob or Off. Tickets count days from them.</span>
         <div class="jt-chk">${groups.map(g => `<label class="check"><input type="checkbox" name="g_${esc(g)}" ${!j || (j.groups || []).includes(g) ? 'checked' : ''}> ${esc(g)}</label>`).join('')}
         <input name="g_extra" placeholder="Another group (e.g. Nitrogen)" class="jt-gx"></div></div>
       <div class="row3"><label class="f">Rig name<input name="rig_name" value="${esc(j?.rig_name || 'N/A')}"></label><label class="f">Rig owner<input name="rig_owner" value="${esc(j?.rig_owner || 'N/A')}"></label><label class="f">Rig type<input name="rig_type" value="${esc(j?.rig_type || 'N/A')}"></label></div>
       <div class="row3"><label class="f">Mobilisation date<input type="date" name="mob_date" value="${esc(j?.mob_date || '')}"></label><label class="f">Demobilisation date<input type="date" name="demob_date" value="${esc(j?.demob_date || '')}"></label>
-        <label class="f">Status<select name="status">${Object.entries(JT_STATUS).map(([k, v]) => opt(k, v[1], j?.status || 'planned')).join('')}</select></label></div>
+        <label class="f">Status<select name="status">${Object.entries(JT_STATUS).filter(([k]) => k !== 'closed' || admin).map(([k, v]) => opt(k, v[1], j?.status || 'planned')).join('')}</select></label></div>
+      ${!j && others.length ? `<label class="f">Copy crew and ticket items from<select name="copy_from"><option value="">Don’t copy</option>${others.map(o => opt(o.id, [o.job_no, o.project, o.field].filter(Boolean).join(' · '), '')).join('')}</select>
+        <span class="hint">Saves typing the same team and items again. You can change them after.</span></label>` : ''}
       <label class="f">Notes<textarea name="notes" rows="2">${esc(j?.notes || '')}</textarea></label>`,
+    onOpen: d => { const sel = $('[name=client_id]', d), nc = $('[name=new_client]', d); sel.onchange = () => { nc.hidden = sel.value !== '__new'; if (!nc.hidden) nc.focus(); }; },
     onSubmit: async x => {
       const gs = groups.filter(g => x['g_' + g]); if (x.g_extra?.trim()) gs.push(x.g_extra.trim());
       if (!gs.length) throw new Error('Tick at least one equipment group.');
-      const id = await q(sb.rpc('jt_job_save', { p: { ...x, id: j?.id || null, groups: gs, own_logos: j?.own_logos } }));
-      toast(j ? 'Job saved' : 'Job created'); go('#/jt/job/' + id); if (j) render({ quiet: true }); return id;
+      if (x.client_id === '__new') {
+        if (!x.new_client?.trim()) throw new Error('Type the new client’s name.');
+        x.client_id = await q(sb.rpc('jt_client_save', { p: { name: x.new_client.trim() } })); await jtLoad(true);
+      }
+      const p = { ...x, id: j?.id || null, groups: gs, own_logos: j?.own_logos }; delete p.new_client; delete p.copy_from;
+      if (!admin) p.lead_id = j ? j.lead_id : S.profile.id;
+      const id = await q(sb.rpc('jt_job_save', { p }));
+      if (!j && x.copy_from) {
+        try { const c = await q(sb.rpc('jt_job_copy', { p_job: id, p_from: +x.copy_from, p_crew: true, p_items: true }));
+          toast(`Job created. Copied ${plural(c.crew, 'person', 'people')} and ${plural(c.items, 'ticket item')}${c.skipped ? ` (${plural(c.skipped, 'item')} left out: their equipment group isn’t on this job)` : ''}.`); }
+        catch (e) { toast('Job created, but the copy didn’t work: ' + niceError(e), true); }
+      } else toast(j ? 'Job saved' : 'Job created');
+      await jtLoad(true); go('#/jt/job/' + id); if (j) render({ quiet: true }); return id;
     } });
 }
 
@@ -181,7 +207,7 @@ const jtJob = {
     else if (this.tab === 'breakdown') { this.bd = await q(sb.rpc('jt_breakdown', { p_job: id })); body = this.breakdown(j, this.bd); }
     else body = this.setup(j);
     return topbar(esc(j.job_no), `${esc(j.client?.short_name || j.client?.name || '')}${j.project ? ' · ' + esc(j.project) : ''}${j.field ? ' · ' + esc(j.field) : ''}`,
-        `${statusBtns}${jtAdmin() ? `<button class="btn" id="jt-edit">${ico('edit')}Edit</button>` : ''}${j.can_write && j.status !== 'closed' ? `<a class="btn tagbtn" href="#/jt/report/new?job=${j.id}">${ico('plus')}New daily report</a>` : ''}`) +
+        `${statusBtns}${j.can_manage && !S.viewAs && (jtAdmin() || j.status !== 'closed') ? `<button class="btn" id="jt-edit">${ico('edit')}Edit</button>` : ''}${j.can_write && j.status !== 'closed' ? `<a class="btn tagbtn" href="#/jt/report/new?job=${j.id}">${ico('plus')}New daily report</a>` : ''}`) +
       `<section class="panel"><div class="body jt-facts">
         <div><span>Status</span>${jtChip(JT_STATUS, j.status)}</div><div><span>Client</span><b>${esc(j.client?.name || '—')}</b></div>
         <div><span>Client PO</span><b>${esc(j.client_po || '—')}</b></div><div><span>Lead engineer</span><b>${esc(j.lead_name || '—')}</b></div>
@@ -221,20 +247,20 @@ const jtJob = {
       <tfoot><tr><td colspan="4" class="num">Operating / standby days</td>${(j.groups || []).map(g => `<td class="nowrap">${rows.filter(r => r.status?.[g] === 'op').length} / ${rows.filter(r => r.status?.[g] === 'stdby').length}</td>`).join('')}</tr></tfoot></table></div></section>`;
   },
   setup(j) {
-    const admin = jtAdmin();
+    const admin = jtAdmin(); const manage = j.can_manage && !S.viewAs && (admin || j.status !== 'closed');
     const items = j.items; const bySec = Object.keys(JT_SEC).map(k => [k, items.filter(i => i.section === k)]).filter(([, a]) => a.length);
     return `<section class="panel"><header><h2>Wells</h2><span class="meta">${plural(j.wells.length, 'well')}</span>${j.can_write && j.status !== 'closed' ? `<span class="right"><button class="btn small" id="jt-addwell">${ico('plus')}Add well</button></span>` : ''}</header>
         ${j.wells.length ? `<ul class="list">${j.wells.map(w => `<li><div style="flex:1"><div class="name">${esc(w.name)}</div><div class="sub">${esc(w.field || j.field || '')} · ${plural(j.reports.filter(r => r.well_id === w.id).length, 'report')}</div></div>
           ${j.can_write ? `<div class="end"><button class="btn small" data-wedit="${w.id}">Rename</button>${admin ? ` <button class="btn small danger" data-wdel="${w.id}">${ico('trash')}</button>` : ''}</div>` : ''}</li>`).join('')}</ul>`
           : `<div class="empty">Add the first well. Engineers can add the next one as the crew moves.</div>`}</section>
-      <section class="panel"><header><h2>Crew</h2><span class="meta">${plural(j.crew.length, 'person', 'people')}</span>${admin ? `<span class="right"><button class="btn small" id="jt-crew">${ico('edit')}Edit crew</button></span>` : ''}</header>
-        ${j.crew.length ? `<ul class="list">${j.crew.map(c => `<li><div style="flex:1"><div class="name">${esc(c.name)}${c.profile_id === j.lead_id ? ' ' + chip('out', 'Lead') : ''}</div><div class="sub">${esc([c.role, c.company !== 'GANKCO' ? c.company : ''].filter(Boolean).join(' · '))}${c.profile_id ? '' : ' · not in Nest'}</div></div></li>`).join('')}</ul>`
+      <section class="panel"><header><h2>Crew</h2><span class="meta">${plural(j.crew.length, 'person', 'people')}</span>${manage ? `<span class="right"><button class="btn small" id="jt-copy">${ico('copy')}Copy from another job</button><button class="btn small" id="jt-crew">${ico('edit')}Edit crew</button></span>` : ''}</header>
+        ${j.crew.length ? `<ul class="list">${j.crew.map(c => `<li><div style="flex:1"><div class="name">${esc(c.name)}${c.profile_id === j.lead_id ? ' ' + chip('out', 'Lead') : ''}${c.is_hse ? ' ' + chip('ok', 'HSE') : ''}</div><div class="sub">${esc([c.role, c.company !== 'GANKCO' ? c.company : ''].filter(Boolean).join(' · '))}${c.profile_id ? '' : ' · not in Nest'}</div></div></li>`).join('')}</ul>`
           : '<div class="empty">No crew yet.</div>'}
-        <div class="body muted small">Engineers see and work on the jobs they’re crew on. Subcontractor crew can be typed in by name.</div></section>
-      <section class="panel"><header><h2>Ticket items for this job</h2><span class="meta">${plural(items.length, 'item')}</span>${admin ? `<span class="right"><button class="btn small" id="jt-items">${ico('edit')}Choose items</button></span>` : ''}</header>
+        <div class="body muted small">Engineers see and work on the jobs they’re crew on. Subcontractor crew can be typed in by name. ${j.crew.some(c => c.is_hse) ? 'The HSE person fills the HSE part of each daily report.' : 'Mark the HSE person on board (Edit crew) and they fill the HSE part of each daily report.'}</div></section>
+      <section class="panel"><header><h2>Ticket items for this job</h2><span class="meta">${plural(items.length, 'item')}</span>${manage ? `<span class="right"><button class="btn small" id="jt-items">${ico('edit')}Choose items</button></span>` : ''}</header>
         ${items.length ? bySec.map(([k, a]) => `<div class="jt-sec">${esc(JT_SEC[k])}</div><ul class="list">${a.map(i => `<li><div style="flex:1"><div class="name">${esc(i.description)}${i.is_new ? ' ' + chip('soon', 'New') : ''}</div>
             <div class="sub">${esc(jtRuleText(i))} · qty ${jtNum(i.qty)}</div></div></li>`).join('')}</ul>`).join('')
-          : `<div class="empty">No items yet. ${admin ? 'Press <b>Choose items</b> and pick what this job will put on its tickets.' : 'An operations manager chooses them.'} New tickets start from this list.</div>`}</section>
+          : `<div class="empty">No items yet. ${manage ? 'Press <b>Choose items</b> and pick what this job will put on its tickets.' : 'The lead engineer or an operations manager chooses them.'} New tickets start from this list.</div>`}</section>
       <section class="panel"><header><h2>Logos on the daily report</h2><span class="meta">${j.own_logos ? 'This job’s own logos' : 'The client’s logos'}</span></header><div class="body">
         <div class="jt-logos" id="jt-logos">${j.logos.map(l => `<span class="jt-logo" data-logo="${l.id}"></span>`).join('') || '<span class="muted">No logos yet.</span>'}</div>
         ${admin ? `<label class="switch mini mt"><input type="checkbox" id="jt-ownlogos" ${j.own_logos ? 'checked' : ''}><span class="sw"></span><span>Use different logos for this job (for example an asset with other partners)</span></label>
@@ -255,6 +281,7 @@ const jtJob = {
     $$('[data-wdel]', main).forEach(b => b.onclick = async () => { const w = j.wells.find(x => x.id === +b.dataset.wdel); if (!confirm(`Remove ${w.name} from this job?`)) return;
       try { await q(sb.rpc('jt_well_delete', { p_id: w.id })); toast('Well removed'); render({ quiet: true }); } catch (e) { toast(niceError(e), true); } });
     const cr = $('#jt-crew', main); if (cr) cr.onclick = () => jtCrewForm(j);
+    const cp = $('#jt-copy', main); if (cp) cp.onclick = () => jtCopyForm(j);
     const it = $('#jt-items', main); if (it) it.onclick = () => jtJobItemsForm(j);
     const ol = $('#jt-ownlogos', main); if (ol) ol.onchange = async () => { try { await q(sb.rpc('jt_job_save', { p: { ...j, client_id: j.client_id, own_logos: ol.checked, groups: j.groups } })); render({ quiet: true }); } catch (e) { toast(niceError(e), true); } };
     const dj = $('#jt-deljob', main); if (dj) dj.onclick = async () => { if (!confirm(`Delete ${j.job_no}? This can’t be undone.`)) return; try { await q(sb.rpc('jt_job_delete', { p_id: j.id })); toast('Job deleted'); go('#/jt/jobs'); } catch (e) { toast(niceError(e), true); } };
@@ -273,18 +300,35 @@ async function jtCrewForm(j) {
   const people = (S.jt.cfg.people || []).filter(p => p.role);
   const row = (c = {}) => `<div class="jt-crewrow"><select name="pid">${opt('', 'Typed in (not in Nest)', c.profile_id || '')}${people.map(p => opt(p.id, p.name, c.profile_id)).join('')}</select>
     <input name="name" placeholder="Name" value="${esc(c.profile_id ? '' : c.name || '')}"><input name="role" placeholder="Role (e.g. TTSC Engineer)" value="${esc(c.role || '')}">
-    <input name="company" placeholder="Company" value="${esc(c.company || 'GANKCO')}"><button type="button" class="btn small" data-rm title="Remove">${ico('trash')}</button></div>`;
+    <input name="company" placeholder="Company" value="${esc(c.company || 'GANKCO')}"><label class="check jt-hsechk" title="The HSE person on board fills the HSE part of each daily report"><input type="checkbox" class="jt-hse" ${c.is_hse ? 'checked' : ''}> HSE</label>
+    <button type="button" class="btn small" data-rm title="Remove">${ico('trash')}</button></div>`;
   return modal({ title: 'Crew on ' + j.job_no, wide: true, submit: 'Save crew',
-    sub: 'People with JobTrack who are on the crew can write this job’s daily reports and tickets. Subcontractor crew can be typed in by name. The lead engineer always stays on.',
+    sub: 'People with JobTrack who are on the crew can write this job’s daily reports and tickets. Subcontractor crew can be typed in by name. Tick <b>HSE</b> for the HSE person on board: they fill the HSE part of each daily report, and the report can’t be sent until they do. The lead engineer always stays on.',
     body: `<div id="jt-crewrows">${j.crew.map(row).join('')}</div><button type="button" class="btn small" id="jt-addcrew">${ico('plus')}Add someone</button>`,
     onOpen: d => {
-      const wire = () => $$('[data-rm]', d).forEach(b => b.onclick = () => b.closest('.jt-crewrow').remove());
+      const wire = () => { $$('[data-rm]', d).forEach(b => b.onclick = () => b.closest('.jt-crewrow').remove());
+        $$('.jt-hse', d).forEach(c => c.onchange = () => { if (c.checked) $$('.jt-hse', d).forEach(o => { if (o !== c) o.checked = false; }); }); };
       $('#jt-addcrew', d).onclick = () => { $('#jt-crewrows', d).insertAdjacentHTML('beforeend', row()); wire(); }; wire();
     },
     onSubmit: async (x, d) => {
-      const rows = $$('.jt-crewrow', d).map(r => ({ profile_id: $('[name=pid]', r).value || null, name: $('[name=name]', r).value.trim(), role: $('[name=role]', r).value.trim(), company: $('[name=company]', r).value.trim() }))
+      const rows = $$('.jt-crewrow', d).map(r => ({ profile_id: $('[name=pid]', r).value || null, name: $('[name=name]', r).value.trim(), role: $('[name=role]', r).value.trim(), company: $('[name=company]', r).value.trim(), is_hse: $('.jt-hse', r).checked }))
         .filter(r => r.profile_id || r.name);
+      const h = rows.find(r => r.is_hse);
+      if (h && h.profile_id && (S.jt.cfg.people || []).find(p => p.id === h.profile_id)?.role === 'viewer') throw new Error('The HSE person has view-only JobTrack, so they can’t fill the HSE part. Ask the Developer to make them an Engineer, or untick HSE.');
       await q(sb.rpc('jt_crew_set', { p_job: j.id, p_rows: rows })); toast('Crew saved'); render({ quiet: true });
+    } });
+}
+// copy the crew and/or ticket items from another job
+async function jtCopyForm(j) {
+  const jobs = (await q(sb.from('jt_jobs').select('id,job_no,project,field').neq('id', j.id).order('seq', { ascending: false }).limit(80)));
+  if (!jobs.length) return toast('There’s no other job to copy from yet.', true);
+  return modal({ title: 'Copy from another job', submit: 'Copy', sub: 'Adds the people and ticket items from that job to this one. Nothing already here is removed or doubled.',
+    body: `<label class="f">From<select name="from" required>${jobs.map(o => opt(o.id, [o.job_no, o.project, o.field].filter(Boolean).join(' · '), '')).join('')}</select></label>
+      <label class="check"><input type="checkbox" name="crew" checked> Crew</label><label class="check"><input type="checkbox" name="items" checked> Ticket items</label>`,
+    onSubmit: async x => {
+      if (!x.crew && !x.items) throw new Error('Tick crew, ticket items or both.');
+      const c = await q(sb.rpc('jt_job_copy', { p_job: j.id, p_from: +x.from, p_crew: !!x.crew, p_items: !!x.items }));
+      toast(`Copied ${plural(c.crew, 'person', 'people')} and ${plural(c.items, 'ticket item')}${c.skipped ? `. ${plural(c.skipped, 'item')} left out: their equipment group isn’t on this job` : ''}`); render({ quiet: true });
     } });
 }
 
@@ -417,9 +461,41 @@ async function jtFlush() {
 }
 window.addEventListener('online', () => { if (S.session) jtFlush(); });
 
+// 3.0.9: each activity has a start time only. It runs until the next one starts; the last one until the day ends.
+const jtTm = t => /^\d\d:\d\d$/.test(t || '') ? +t.slice(0, 2) * 60 + +t.slice(3) : null;
+// the order of the day: a time before the day's start (05:00, or the first activity if that's earlier) is after midnight
+const jtPivot = first => Math.min(300, jtTm(first) ?? 300);
+const jtDayKey = (t, pivot) => { const m = jtTm(t); return m == null ? 1e9 : m < pivot ? m + 1440 : m; };
+const jtSpans = (ops, end) => ops.map((o, i) => { const to = i < ops.length - 1 ? ops[i + 1].from : (end || ''); return { ...o, to, mins: jtMins(o.from, to) }; });
+const jtNowHM = () => { const d = new Date(); return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`; };
+
+// the Daily Operations Summary, written from the day's activities: the work steps, without routine lines or readings
+const JT_ROUTINE = /\b(arrived|arrival|departed|left (the )?location|safety meeting|toolbox|tbt|htbt|pre-?job|jha|jsa|ptw|permit to work|revalidated|housekeeping|lunch|tea break)\b/i;
+const JT_READING = /^(@|checking weights?\b|checked weights?\b)|^[A-Z]{2,6}\s*[-:=]\s*\d|^(rw|hw|puw|sow)\b/i;
+function jtAutoSummary(ops) {
+  const acts = [];
+  (ops || []).forEach(o => {
+    const cl = [];
+    String(o.desc || '').split(/\n/).forEach(line => {
+      line = line.replace(/\s+/g, ' ').trim(); if (!line) return;
+      line.split(/;\s*|\.\s+(?=[A-Z0-9])/).forEach(c => {
+        c = c.trim().replace(/[.;,:]+$/, ''); if (!c || JT_READING.test(c)) return;
+        if (/^(ok|okay|done|good|successful)\b/i.test(c) && c.length < 14) { if (cl.length) cl[cl.length - 1] += '; ' + c; return; }   // "Surface tested PCM; OK"
+        cl.push(c);
+      });
+    });
+    const keep = cl.filter(c => !JT_ROUTINE.test(c));
+    if (keep.length) acts.push(keep.join('; '));
+  });
+  const out = []; acts.forEach(c => { if (out[out.length - 1]?.toLowerCase() !== c.toLowerCase()) out.push(c); });
+  // a day of routine only (standby, moving) keeps its lines
+  if (!out.length) (ops || []).forEach(o => { const t = String(o.desc || '').replace(/\s+/g, ' ').trim().replace(/[.;,:]+$/, ''); if (t) out.push(t); });
+  return out.length ? out.map(c => c.charAt(0).toUpperCase() + c.slice(1)).join('. ') + '.' : '';
+}
+
 const jtReport = {
   async load(parts, params) {
-    this.key = null; this.r = null;
+    this.key = null; this.r = null; this.behalf = false;
     if (parts[2] === 'new') {
       const jobId = +params?.get('job');
       if (!jobId) return this.picker();
@@ -431,9 +507,13 @@ const jtReport = {
       const ex = j.reports.find(r => r.well_id === wellId && r.report_date === date);
       if (ex) { setTimeout(() => go('#/jt/report/' + ex.id), 0); return '<div class="loading">Opening…</div>'; }
       const prev = (await q(sb.from('jt_reports').select('*').eq('job_id', j.id).lte('report_date', date).order('report_date', { ascending: false }).limit(1)))[0];
+      // POB from the crew (it can still be changed on the day)
+      const gk = j.crew.filter(c => (c.company || 'GANKCO').toUpperCase() === 'GANKCO').length, oth = j.crew.length - gk;
+      const hseCrew = j.crew.find(c => c.is_hse);
       this.r = { id: null, job_id: j.id, well_id: wellId, report_date: date, status: 'draft', client_reps: prev?.client_reps || j.client_reps || '', gankco_rep: prev?.gankco_rep || j.lead_name || '',
-        man_hours: prev?.man_hours ?? '', tri: 0, lti: false, hse_comment: 'No incident / accident', summary: '', ops: [{ from: '06:00', to: '', desc: '' }],
-        equipment: prev?.equipment || {}, comments: '', look_ahead: '', pob_client: prev?.pob_client ?? '', pob_gankco: prev?.pob_gankco ?? '', pob_others: prev?.pob_others ?? '', photos: [], can_edit: true };
+        man_hours: prev?.man_hours ?? '', tri: 0, lti: false, hse_comment: 'No incident / accident', summary: '', ops: [{ from: '06:00', desc: '' }], day_end: '', weather: prev?.weather || '',
+        equipment: prev?.equipment || {}, comments: '', look_ahead: '', pob_client: prev?.pob_client ?? '', pob_gankco: j.crew.length ? gk : prev?.pob_gankco ?? '', pob_others: j.crew.length ? oth : prev?.pob_others ?? '',
+        photos: [], can_edit: true, hse_id: j.hse_id || null, hse_name: hseCrew?.name || '', is_hse: !!j.is_hse, is_lead: j.lead_id === S.profile.id };
       this.key = `nest.jt.dor.new.${j.id}`;
     } else {
       const id = +parts[2];
@@ -443,7 +523,10 @@ const jtReport = {
     }
     const local = (() => { try { return JSON.parse(localStorage.getItem(this.key) || 'null'); } catch (e) { return null; } })();
     this.local = local && (!this.r.updated_at || local.at > new Date(this.r.updated_at).getTime()) ? local : null;
-    return this.r.can_edit ? this.form() : this.view();
+    if (this.local?.behalf) this.behalf = true;
+    // the HSE person on board (not the lead) fills just the HSE part
+    this.hseOnly = !!(this.r.id && this.r.is_hse && !this.r.is_lead && !jtAdmin());
+    return this.hseOnly ? this.hsePage() : this.r.can_edit ? this.form() : this.view();
   },
   // which job? (from the phone bar)
   async picker() {
@@ -458,11 +541,48 @@ const jtReport = {
     return `<div class="jt-rhead"><div><div class="jt-rjob">${esc(j.job_no)} · ${esc(j.client?.short_name || j.client?.name || '')}</div>
       <div class="jt-rmeta">${r.id ? `Report ${r.report_no} · day ${r.report_no} on this well · ` : ''}${r.id ? jtChip(JT_RSTATUS, r.status) : chip('muted', 'New')}${r.submitted_by_name ? ` <span class="sub">sent by ${esc(r.submitted_by_name)} ${fdt(r.submitted_at)}</span>` : ''}${r.reviewed_by_name ? ` <span class="sub">· reviewed by ${esc(r.reviewed_by_name)}</span>` : ''}</div></div></div>`;
   },
+  // who fills the HSE part here: 'open' (you can type it) or 'locked' (the HSE person does)
+  hseMode() {
+    const r = this.r;
+    if (!r.hse_id || r.is_hse) return 'open';
+    return this.behalf ? 'open' : 'locked';
+  },
+  canBehalf() { return jtAdmin() || this.j.lead_id === S.profile.id; },
+  hseStatus() {
+    const r = this.r;
+    if (r.hse_at) return chip('ok', `Filled by ${r.hse_by_name || ''}${r.hse_on_behalf ? ` for ${r.hse_name || 'HSE'}` : ''}`);
+    return r.hse_id ? chip('pending', `Waiting for ${r.hse_name || 'HSE'}`) : chip('muted', 'Not filled yet');
+  },
+  hseFields(v) {
+    return `<div class="row3"><label class="f">Total man-hours<input type="number" name="man_hours" min="0" step="any" value="${esc(v.man_hours ?? '')}"></label>
+        <label class="f">TRI<input type="number" name="tri" min="0" step="1" value="${esc(v.tri ?? 0)}"></label>
+        <label class="check jt-ltichk"><input type="checkbox" name="lti" ${v.lti ? 'checked' : ''}> A lost-time injury (LTI) today</label></div>
+      <label class="f">HSE comment<input name="hse_comment" value="${esc(v.hse_comment || '')}" placeholder="No incident / accident"></label>`;
+  },
+  hseSection(v) {
+    const r = this.r, mode = this.hseMode(); const who = r.hse_name || 'the HSE person';
+    const head = `<header><h2>HSE</h2><span class="meta">Days without LTI: <b id="jt-lti">${r.lti_days ?? '—'}</b></span><span class="right">${r.hse_id || r.hse_at ? this.hseStatus() : ''}</span></header>`;
+    if (mode === 'open') return `<section class="panel jt-hse" id="jt-hsebox">${head}<div class="body">
+      ${this.behalf ? `<div class="notice">You’re filling this on behalf of ${esc(who)}. It’s recorded that you did. <button type="button" class="btn small" id="jt-hseundo">Leave it to ${esc(who)}</button></div>` : ''}
+      ${!r.hse_id && this.j.crew.some(c => c.is_hse) ? `<p class="muted small">For ${esc(this.j.crew.find(c => c.is_hse).name)} (HSE, not in Nest).</p>` : ''}
+      ${this.hseFields(v)}</div></section>`;
+    const filled = !!r.hse_at;
+    return `<section class="panel jt-hse locked" id="jt-hsebox">${head}<div class="body">
+      ${filled ? `<div class="jt-facts"><div><span>Man-hours</span><b>${jtNum(r.man_hours) || '—'}</b></div><div><span>TRI</span><b>${r.tri ?? 0}</b></div><div><span>LTI today</span><b>${r.lti ? 'Yes' : 'No'}</b></div><div><span>HSE comment</span><b>${esc(r.hse_comment || '—')}</b></div></div>`
+        : `<p class="muted">${esc(who)} (HSE on board) fills this part${r.id ? '' : ' once the report is saved'}. The report can’t be sent until it’s filled.</p>`}
+      ${['draft', 'returned'].includes(r.status || 'draft') ? `<div class="actionrow">${r.id && !filled ? `<button type="button" class="btn small" id="jt-hserem">${ico('bell')}Remind ${esc(r.hse_name || 'HSE')}</button>` : ''}
+        ${this.canBehalf() ? `<button type="button" class="btn small" id="jt-hsemine">${ico('edit')}${filled ? 'Change it myself' : 'Fill it myself'}</button>` : ''}</div>` : ''}</div></section>`;
+  },
+  opRow(o) {
+    return `<div class="jt-op"><input type="time" class="jt-from" value="${esc(o.from || '')}" aria-label="Started at"><span class="jt-hrs"></span>
+      <textarea class="jt-desc" rows="1" placeholder="What the crew did">${esc(o.desc || '')}</textarea><button type="button" class="btn small" data-oprm title="Remove">${ico('trash')}</button></div>`;
+  },
   form() {
     const r = this.r, j = this.j, admin = jtAdmin();
     const v = this.local ? { ...r, ...this.local.data } : r;
     const groups = j.groups || [];
     const others = (r.same_day || []);
+    const ops = (v.ops?.length ? v.ops : [{ from: '', desc: '' }]);
     return topbar(r.id ? `Daily report · ${esc(r.well || '')}` : 'New daily report', jtDay(v.report_date), `<a class="btn" href="#/jt/job/${j.id}">Back to job</a>`) + this.head() +
       `${this.local ? `<div class="notice">This phone has changes that weren’t saved (${fdt(this.local.at)}). They’re shown below. <button type="button" class="btn small" id="jt-discard">Discard them</button></div>` : ''}
       ${r.status === 'returned' && r.return_note ? `<div class="notice bad"><b>Sent back:</b> ${esc(r.return_note)}</div>` : ''}
@@ -473,23 +593,26 @@ const jtReport = {
         <label class="f">Date<input type="date" name="report_date" value="${esc(v.report_date)}" max="${localISO(1)}" required></label></div>
         ${others.length ? `<p class="muted small">Also on this day: ${others.map(o => `<a href="#/jt/report/${o.id}">${esc(o.well)}</a>`).join(', ')}</p>` : ''}
         ${!j.wells.length ? '<div class="notice">Add the well first.</div>' : ''}</div></section>
+      <section class="panel"><header><h2>Activities</h2><span class="meta" id="jt-tot"></span></header><div class="body">
+        <p class="muted small">Enter the time each activity started. It runs until the next one starts.</p>
+        <div id="jt-ops">${ops.map(o => this.opRow(o)).join('')}</div>
+        <div class="jt-opbar"><button type="button" class="btn small" id="jt-addop">${ico('plus')}Add activity</button><button type="button" class="btn small" id="jt-now">${ico('clock')}Now</button>
+          <label class="jt-end">Day ended at<input type="time" name="day_end" value="${esc(v.day_end || '')}" aria-label="Day ended at"><button type="button" class="btn small" id="jt-endnow">Now</button><span class="hint">Usually 18:00. Fill it when the crew stops.</span></label>
+          <span class="jt-sp"></span><button type="button" class="btn small" id="jt-wa2">${ico('chat')}Copy for WhatsApp</button></div></div></section>
+      <section class="panel"><header><h2>Daily operations summary (24 hr)</h2><span class="right"><button type="button" class="btn small" id="jt-sumgo">${ico('undo')}Rebuild from activities</button></span></header><div class="body">
+        <textarea name="summary" rows="4" placeholder="Written for you from the activities. You can change it.">${esc(v.summary || '')}</textarea>
+        <p class="muted small" id="jt-sumnote">Written from today’s activities. Your changes are kept unless you press Rebuild.</p></div></section>
+      <section class="panel"><header><h2>Weather condition</h2><span class="meta">For the WhatsApp update</span></header><div class="body">
+        <input name="weather" value="${esc(v.weather || '')}" placeholder="Calm and Cloudy" list="jt-wx"><datalist id="jt-wx">${['Calm and Cloudy', 'Sunny', 'Calm and Sunny', 'Cloudy', 'Rainy', 'Light rain', 'Heavy rain', 'Windy', 'Stormy'].map(x => `<option value="${x}">`).join('')}</datalist></div></section>
       <section class="panel"><header><h2>Equipment status today</h2><span class="meta">Tickets count operating and standby days from this</span></header><div class="body jt-eqset">
         ${groups.map(g => `<div class="jt-eqrow"><b>${esc(g)}</b><div class="seg jt-eqseg" data-g="${esc(g)}">${Object.entries(JT_EQ).map(([k, x]) => `<button type="button" data-v="${k}" class="${v.equipment?.[g] === k ? 'on ' + x[0] : ''}">${x[1]}</button>`).join('')}</div></div>`).join('')}
         <p class="muted small">Op: working. Stdby: on location, not working. Mob/Demob: moving in or out. Off: not on location.</p></div></section>
-      <section class="panel"><header><h2>Daily operations summary (24 hr)</h2></header><div class="body">
-        <textarea name="summary" rows="4" placeholder="Team arrived on location, revalidated the PTW…">${esc(v.summary || '')}</textarea></div></section>
-      <section class="panel"><header><h2>Operations breakdown (24 hr)</h2><span class="meta" id="jt-tot"></span></header><div class="body">
-        <div id="jt-ops">${(v.ops?.length ? v.ops : [{ from: '', to: '', desc: '' }]).map(o => this.opRow(o)).join('')}</div>
-        <button type="button" class="btn small" id="jt-addop">${ico('plus')}Add a line</button></div></section>
-      <section class="panel"><header><h2>HSE</h2><span class="meta">Days without LTI: <b id="jt-lti">${r.lti_days ?? '—'}</b></span></header><div class="body">
-        <div class="row3"><label class="f">Total man-hours<input type="number" name="man_hours" min="0" step="any" value="${esc(v.man_hours ?? '')}"></label>
-          <label class="f">TRI<input type="number" name="tri" min="0" step="1" value="${esc(v.tri ?? 0)}"></label>
-          <label class="check jt-ltichk"><input type="checkbox" name="lti" ${v.lti ? 'checked' : ''}> A lost-time injury (LTI) today</label></div>
-        <label class="f">HSE comment<input name="hse_comment" value="${esc(v.hse_comment || '')}"></label></div></section>
+      ${this.hseSection(v)}
       <section class="panel"><header><h2>People</h2></header><div class="body">
         <div class="row2"><label class="f">Client rep(s)<input name="client_reps" value="${esc(v.client_reps || '')}"></label><label class="f">GANKCO rep<input name="gankco_rep" value="${esc(v.gankco_rep || '')}"></label></div>
         <div class="row3"><label class="f">POB · client<input type="number" min="0" name="pob_client" value="${esc(v.pob_client ?? '')}"></label><label class="f">POB · GANKCO<input type="number" min="0" name="pob_gankco" value="${esc(v.pob_gankco ?? '')}"></label>
-          <label class="f">POB · others<input type="number" min="0" name="pob_others" value="${esc(v.pob_others ?? '')}"></label></div></div></section>
+          <label class="f">POB · others<input type="number" min="0" name="pob_others" value="${esc(v.pob_others ?? '')}"></label></div>
+        ${!r.id && j.crew.length ? '<p class="muted small">GANKCO and others are counted from the job’s crew. Change them if today is different.</p>' : ''}</div></section>
       <section class="panel"><header><h2>Comments and look ahead</h2></header><div class="body">
         <label class="f">General comments / observations<textarea name="comments" rows="2">${esc(v.comments || '')}</textarea></label>
         <label class="f">Look ahead<textarea name="look_ahead" rows="2" placeholder="Drift well and conduct BHP survey">${esc(v.look_ahead || '')}</textarea></label></div></section>
@@ -500,74 +623,141 @@ const jtReport = {
       </form>
       <div class="jt-actbar">
         ${admin && r.status === 'submitted' ? `<button class="btn" id="jt-back">${ico('undo')}Send back</button><button class="btn primary" id="jt-ok">${ico('check')}Mark reviewed</button>` : ''}
-        <button class="btn" id="jt-wa">${ico('chat')}Copy for WhatsApp</button>${r.id ? `<button class="btn" id="jt-pdf">${ico('pdf')}PDF</button>` : ''}
+        <button class="btn" id="jt-wa">${ico('chat')}WhatsApp</button>${r.id ? `<button class="btn" id="jt-pdf">${ico('pdf')}PDF</button><button class="btn" id="jt-xl">${ico('down')}Excel</button>` : ''}
         ${r.id && (admin || ['draft', 'returned'].includes(r.status)) ? `<button class="btn danger" id="jt-del">${ico('trash')}</button>` : ''}
         <span class="jt-sp"></span>
         <button class="btn" id="jt-save">${ico('check')}Save</button>${['draft', 'returned'].includes(r.status || 'draft') ? `<button class="btn tagbtn" id="jt-send">${ico('send')}Save and send</button>` : ''}</div>`;
   },
-  opRow(o) {
-    return `<div class="jt-op"><input type="time" class="jt-from" value="${esc(o.from || '')}" aria-label="From"><span class="jt-to-sep">to</span><input type="time" class="jt-to" value="${esc(o.to || '')}" aria-label="To">
-      <span class="jt-hrs">${jtHm(jtMins(o.from, o.to))}</span><textarea class="jt-desc" rows="1" placeholder="What happened">${esc(o.desc || '')}</textarea><button type="button" class="btn small" data-oprm title="Remove">${ico('trash')}</button></div>`;
-  },
+  // the activities as typed, in the order of the day
+  opsNow(main) { return $$('.jt-op', main).map(x => ({ from: $('.jt-from', x).value, desc: $('.jt-desc', x).value.trim() })); },
   // the report as typed
   collect(main) {
     const f = $('#jt-dor', main); const x = Object.fromEntries(new FormData(f).entries());
     const eq = {}; $$('.jt-eqseg', main).forEach(s => { const on = $('button.on', s); if (on) eq[s.dataset.g] = on.dataset.v; });
-    const ops = $$('.jt-op', main).map(r => ({ from: $('.jt-from', r).value, to: $('.jt-to', r).value, desc: $('.jt-desc', r).value.trim() })).filter(o => o.desc || o.to);
-    return { id: this.r.id, job_id: this.j.id, well_id: +x.well_id || null, report_date: x.report_date, client_reps: x.client_reps, gankco_rep: x.gankco_rep, man_hours: x.man_hours,
-      tri: x.tri, lti: $('[name=lti]', f).checked, hse_comment: x.hse_comment, summary: x.summary, ops, equipment: eq, comments: x.comments, look_ahead: x.look_ahead,
+    const ops = this.opsNow(main).filter(o => o.desc);
+    const p = { id: this.r.id, job_id: this.j.id, well_id: +x.well_id || null, report_date: x.report_date, client_reps: x.client_reps, gankco_rep: x.gankco_rep,
+      summary: x.summary, ops, day_end: x.day_end || '', weather: x.weather, equipment: eq, comments: x.comments, look_ahead: x.look_ahead,
       pob_client: x.pob_client, pob_gankco: x.pob_gankco, pob_others: x.pob_others };
+    if (this.hseMode() === 'open') { p.hse = { man_hours: x.man_hours, tri: x.tri, lti: !!$('[name=lti]', f)?.checked, hse_comment: x.hse_comment }; if (this.behalf) p.hse_on_behalf = true; }
+    return p;
+  },
+  viewBody(hseEditable) {
+    const r = this.r, j = this.j;
+    const spans = (r.ops || []).map(o => ({ ...o, mins: jtMins(o.from, o.to) }));
+    const tot = spans.reduce((a, o) => a + (o.mins || 0), 0);
+    return `${r.status === 'returned' && r.return_note ? `<div class="notice bad"><b>Sent back:</b> ${esc(r.return_note)}</div>` : ''}
+      ${hseEditable || ''}
+      <section class="panel"><div class="body jt-facts">
+        <div><span>Client</span><b>${esc(j.client?.name || '')}</b></div><div><span>Client rep(s)</span><b>${esc(r.client_reps || '—')}</b></div><div><span>GANKCO rep</span><b>${esc(r.gankco_rep || '—')}</b></div>
+        <div><span>Field · well</span><b>${esc([r.well_field, r.well].filter(Boolean).join(' · '))}</b></div><div><span>Project</span><b>${esc(j.project || '—')}</b></div><div><span>Weather</span><b>${esc(r.weather || '—')}</b></div>
+        ${hseEditable ? '' : `<div><span>Man-hours</span><b>${jtNum(r.man_hours) || '—'}</b></div><div><span>Days without LTI</span><b>${r.lti_days ?? '—'}</b></div><div><span>TRI</span><b>${r.tri ?? 0}</b></div>
+        <div><span>HSE</span><b>${esc(r.hse_comment || '—')}</b>${r.hse_by_name ? `<span class="sub">by ${esc(r.hse_by_name)}${r.hse_on_behalf ? ` for ${esc(r.hse_name || 'HSE')}` : ''}</span>` : ''}</div>`}
+        <div><span>POB (client / GANKCO / others)</span><b>${[r.pob_client, r.pob_gankco, r.pob_others].map(x => x ?? '—').join(' / ')}</b></div></div></section>
+      <section class="panel"><header><h2>Equipment status</h2></header><div class="body jt-eqs">${(j.groups || []).map(g => jtEqChip(g, r.equipment?.[g])).join('')}</div></section>
+      <section class="panel"><header><h2>Daily operations summary (24 hr)</h2></header><div class="body jt-pre">${esc(r.summary || '—')}</div></section>
+      <section class="panel"><header><h2>Activities</h2><span class="meta">${jtHm(tot)} h</span></header>
+        <div class="tablewrap"><table class="t"><thead><tr><th>From</th><th>To</th><th>Hours</th><th>Activity</th></tr></thead><tbody>
+        ${spans.map(o => `<tr><td>${esc(o.from)}</td><td>${esc(o.to || '—')}</td><td>${jtHm(o.mins)}</td><td class="jt-pre">${esc(o.desc)}</td></tr>`).join('') || '<tr><td colspan="4" class="muted">None</td></tr>'}</tbody></table></div></section>
+      <section class="panel"><header><h2>Comments and look ahead</h2></header><div class="body"><p><b>Comments:</b> ${esc(r.comments || '—')}</p><p><b>Look ahead:</b> ${esc(r.look_ahead || '—')}</p></div></section>
+      ${r.photos?.length ? `<section class="panel"><header><h2>Photos</h2></header><div class="body jt-photos">${r.photos.map(p => `<figure class="jt-ph" data-ph="${p.id}"><span class="jt-phimg"></span><figcaption>${esc(p.caption || '')}</figcaption></figure>`).join('')}</div></section>` : ''}`;
   },
   view() {
     const r = this.r, j = this.j, admin = jtAdmin();
-    const tot = (r.ops || []).reduce((a, o) => a + (jtMins(o.from, o.to) || 0), 0);
-    return topbar(`Daily report · ${esc(r.well)}`, jtDay(r.report_date), `<a class="btn" href="#/jt/job/${j.id}">Back to job</a>`) + this.head() +
-      `${r.status === 'returned' && r.return_note ? `<div class="notice bad"><b>Sent back:</b> ${esc(r.return_note)}</div>` : ''}
-      <section class="panel"><div class="body jt-facts">
-        <div><span>Client</span><b>${esc(j.client?.name || '')}</b></div><div><span>Client rep(s)</span><b>${esc(r.client_reps || '—')}</b></div><div><span>GANKCO rep</span><b>${esc(r.gankco_rep || '—')}</b></div>
-        <div><span>Field · well</span><b>${esc([r.well_field, r.well].filter(Boolean).join(' · '))}</b></div><div><span>Project</span><b>${esc(j.project || '—')}</b></div>
-        <div><span>Man-hours</span><b>${jtNum(r.man_hours) || '—'}</b></div><div><span>Days without LTI</span><b>${r.lti_days ?? '—'}</b></div><div><span>TRI</span><b>${r.tri ?? 0}</b></div>
-        <div><span>HSE</span><b>${esc(r.hse_comment || '—')}</b></div><div><span>POB (client / GANKCO / others)</span><b>${[r.pob_client, r.pob_gankco, r.pob_others].map(x => x ?? '—').join(' / ')}</b></div></div></section>
-      <section class="panel"><header><h2>Equipment status</h2></header><div class="body jt-eqs">${(j.groups || []).map(g => jtEqChip(g, r.equipment?.[g])).join('')}</div></section>
-      <section class="panel"><header><h2>Daily operations summary (24 hr)</h2></header><div class="body jt-pre">${esc(r.summary || '—')}</div></section>
-      <section class="panel"><header><h2>Operations breakdown (24 hr)</h2><span class="meta">${jtHm(tot)} h</span></header>
-        <div class="tablewrap"><table class="t"><thead><tr><th>From</th><th>To</th><th>Hours</th><th>Operation</th></tr></thead><tbody>
-        ${(r.ops || []).map(o => `<tr><td>${esc(o.from)}</td><td>${esc(o.to)}</td><td>${jtHm(jtMins(o.from, o.to))}</td><td class="jt-pre">${esc(o.desc)}</td></tr>`).join('') || '<tr><td colspan="4" class="muted">None</td></tr>'}</tbody></table></div></section>
-      <section class="panel"><header><h2>Comments and look ahead</h2></header><div class="body"><p><b>Comments:</b> ${esc(r.comments || '—')}</p><p><b>Look ahead:</b> ${esc(r.look_ahead || '—')}</p></div></section>
-      ${r.photos?.length ? `<section class="panel"><header><h2>Photos</h2></header><div class="body jt-photos">${r.photos.map(p => `<figure class="jt-ph" data-ph="${p.id}"><span class="jt-phimg"></span><figcaption>${esc(p.caption || '')}</figcaption></figure>`).join('')}</div></section>` : ''}
-      <div class="jt-actbar">${admin && r.status === 'submitted' ? `<button class="btn" id="jt-back">${ico('undo')}Send back</button><button class="btn primary" id="jt-ok">${ico('check')}Mark reviewed</button>` : ''}
-        <button class="btn" id="jt-wa">${ico('chat')}Copy for WhatsApp</button><button class="btn" id="jt-pdf">${ico('pdf')}PDF</button></div>`;
+    return topbar(`Daily report · ${esc(r.well)}`, jtDay(r.report_date), `<a class="btn" href="#/jt/job/${j.id}">Back to job</a>`) + this.head() + this.viewBody() +
+      `<div class="jt-actbar">${admin && r.status === 'submitted' ? `<button class="btn" id="jt-back">${ico('undo')}Send back</button><button class="btn primary" id="jt-ok">${ico('check')}Mark reviewed</button>` : ''}
+        <button class="btn" id="jt-wa">${ico('chat')}WhatsApp</button><button class="btn" id="jt-pdf">${ico('pdf')}PDF</button><button class="btn" id="jt-xl">${ico('down')}Excel</button></div>`;
+  },
+  // the HSE person on board: their part to fill, and the rest of the report to read
+  hsePage() {
+    const r = this.r, j = this.j; const open = ['draft', 'returned'].includes(r.status);
+    const box = `<form id="jt-hseform"><section class="panel jt-hse mine"><header><h2>Your HSE section</h2><span class="meta">Days without LTI: <b>${r.lti_days ?? '—'}</b></span><span class="right">${this.hseStatus()}</span></header><div class="body">
+      ${open ? `<p class="muted small">You’re the HSE person on ${esc(j.job_no)}. The lead can’t send this report until you fill this.</p>${this.hseFields(r.hse_at ? r : { ...r, man_hours: r.man_hours ?? '', hse_comment: r.hse_comment || 'No incident / accident' })}
+        <div class="acc-save"><button class="btn primary" type="submit">${ico('check')}Save HSE</button></div>`
+        : `<div class="jt-facts"><div><span>Man-hours</span><b>${jtNum(r.man_hours) || '—'}</b></div><div><span>TRI</span><b>${r.tri ?? 0}</b></div><div><span>LTI today</span><b>${r.lti ? 'Yes' : 'No'}</b></div><div><span>HSE comment</span><b>${esc(r.hse_comment || '—')}</b></div></div>
+        <p class="muted small">The report has been ${r.status === 'reviewed' ? 'reviewed' : 'sent'}. An operations manager can send it back if HSE needs changing.</p>`}</div></section></form>`;
+    return topbar(`Daily report · ${esc(r.well)}`, jtDay(r.report_date), `<a class="btn" href="#/jt/job/${j.id}">Back to job</a>`) + this.head() + this.viewBody(box) +
+      `<div class="jt-actbar"><button class="btn" id="jt-wa">${ico('chat')}WhatsApp</button><button class="btn" id="jt-pdf">${ico('pdf')}PDF</button><button class="btn" id="jt-xl">${ico('down')}Excel</button></div>`;
   },
   bind(main) {
     const r = this.r; if (!r) return; const self = this;
     // photos
     const phs = $$('[data-ph]', main);
     if (phs.length) q(sb.from('jt_files').select('id,mime,data').in('id', phs.map(p => +p.dataset.ph))).then(rows => rows.forEach(f => { const el = $(`[data-ph="${f.id}"] .jt-phimg`, main); if (el) el.innerHTML = `<img src="data:${f.mime};base64,${f.data}" alt="">`; })).catch(() => { });
-    const wa = $('#jt-wa', main); if (wa) wa.onclick = () => jtShareWhatsApp(r.can_edit ? { ...r, ...this.collect(main), well: this.j.wells.find(w => w.id === +$('[name=well_id]', main).value)?.name } : r, this.j);
-    const pdf = $('#jt-pdf', main); if (pdf) pdf.onclick = async () => { try { await jtDorPdf(await q(sb.rpc('jt_report_get', { p_id: r.id })), this.j); } catch (e) { toast(niceError(e), true); } };
+    const live = () => r.can_edit && !this.hseOnly && $('#jt-dor', main) ? (() => { const p = this.collect(main); return { ...r, ...p, ops: jtSpans(p.ops, p.day_end), well: this.j.wells.find(w => w.id === p.well_id)?.name || r.well }; })() : r;
+    const wa = () => jtShareWhatsApp(live(), this.j);
+    ['#jt-wa', '#jt-wa2'].forEach(k => { const b = $(k, main); if (b) b.onclick = wa; });
+    const pdf = $('#jt-pdf', main); if (pdf) pdf.onclick = () => jtDorPdfAsk(r.id, this.j);
+    const xl = $('#jt-xl', main); if (xl) xl.onclick = () => withProgress('Making the Excel file…', async () => { try { await jtDorWorkbook(this.j, [r.id]); } catch (e) { toast(niceError(e), true); } });
     const ok = $('#jt-ok', main); if (ok) ok.onclick = async () => { try { await q(sb.rpc('jt_report_review', { p_id: r.id, p_ok: true, p_note: null })); toast('Reviewed'); render({ quiet: true }); } catch (e) { toast(niceError(e), true); } };
     const bk = $('#jt-back', main); if (bk) bk.onclick = () => modal({ title: 'Send this report back', submit: 'Send back', body: '<label class="f">What needs changing?<textarea name="note" rows="3" required></textarea></label>',
       onSubmit: async x => { await q(sb.rpc('jt_report_review', { p_id: r.id, p_ok: false, p_note: x.note })); toast('Sent back'); render({ quiet: true }); } });
-    if (!r.can_edit) return;
-    // typing: keep a copy on the phone
-    const keep = debounce(() => { try { localStorage.setItem(this.key, JSON.stringify({ at: Date.now(), data: this.collect(main) })); } catch (e) { } }, 600);
-    const ops = $('#jt-ops', main);
-    const total = () => { const t = $$('.jt-op', main).reduce((a, x) => a + (jtMins($('.jt-from', x).value, $('.jt-to', x).value) || 0), 0); $('#jt-tot', main).textContent = t ? `${jtHm(t)} h in total` : ''; };
-    const wire = () => {
-      $$('.jt-op', main).forEach(x => { const upd = () => { $('.jt-hrs', x).textContent = jtHm(jtMins($('.jt-from', x).value, $('.jt-to', x).value)); total(); };
-        $('.jt-from', x).oninput = upd; $('.jt-to', x).oninput = upd; const d = $('.jt-desc', x); d.oninput = () => { d.style.height = 'auto'; d.style.height = d.scrollHeight + 'px'; }; d.oninput();
-        $('[data-oprm]', x).onclick = () => { x.remove(); total(); keep(); }; });
+    // the HSE person's own part
+    const hf = $('#jt-hseform', main); if (hf) hf.onsubmit = async e => {
+      e.preventDefault(); const x = Object.fromEntries(new FormData(hf).entries());
+      if (x.man_hours === '' || !String(x.hse_comment || '').trim()) return toast('Fill the man-hours and the HSE comment.', true);
+      try { await q(sb.rpc('jt_report_hse', { p_id: r.id, p: { man_hours: x.man_hours, tri: x.tri, lti: !!hf.lti?.checked, hse_comment: x.hse_comment } })); toast('HSE saved. The lead can now send the report.'); render({ quiet: true }); }
+      catch (e2) { toast(niceError(e2), true); }
     };
-    wire(); total();
-    $('#jt-addop', main).onclick = () => { const last = $$('.jt-op', main).pop(); ops.insertAdjacentHTML('beforeend', this.opRow({ from: last ? $('.jt-to', last).value : '', to: '', desc: '' })); wire(); $$('.jt-op .jt-to', main).pop().focus(); };
+    if (!r.can_edit || this.hseOnly) return;
+    // typing: keep a copy on the phone
+    const keep = debounce(() => { try { localStorage.setItem(this.key, JSON.stringify({ at: Date.now(), behalf: this.behalf, data: this.collect(main) })); } catch (e) { } }, 600);
+    const ops = $('#jt-ops', main), endIn = $('[name=day_end]', main), sum = $('[name=summary]', main);
+    // the summary follows the activities until someone edits it
+    sum.dataset.auto = !sum.value.trim() || sum.value.trim() === jtAutoSummary(this.opsNow(main).filter(o => o.desc)) ? '1' : '';
+    const autoSum = force => { const t = jtAutoSummary(this.opsNow(main).filter(o => o.desc)); if (force || sum.dataset.auto === '1') { sum.value = t; sum.dataset.auto = '1'; } };
+    sum.addEventListener('input', () => { sum.dataset.auto = sum.value.trim() ? '' : '1'; });
+    $('#jt-sumgo', main).onclick = () => { if (sum.dataset.auto !== '1' && sum.value.trim() && !confirm('Replace the summary with one written from the activities?')) return; autoSum(true); keep(); };
+    const durations = () => {
+      const rows = $$('.jt-op', main); let t = 0;
+      rows.forEach((x, i) => { const to = i < rows.length - 1 ? $('.jt-from', rows[i + 1]).value : endIn.value; const m = $('.jt-desc', x).value.trim() || $('.jt-from', x).value ? jtMins($('.jt-from', x).value, to) : null;
+        $('.jt-hrs', x).textContent = m == null ? (i === rows.length - 1 && $('.jt-from', x).value ? 'until day ends' : '') : jtHm(m) + ' h'; t += m || 0; });
+      $('#jt-tot', main).textContent = t ? `${jtHm(t)} h in total` : '';
+    };
+    // keep the rows in the order of the day
+    const sortRows = () => {
+      const rows = $$('.jt-op', main); if (rows.length < 2) return;
+      const pivot = jtPivot($('.jt-from', rows[0]).value);
+      const sorted = rows.map((x, i) => [x, i]).sort((a, b) => (jtDayKey($('.jt-from', a[0]).value, pivot) - jtDayKey($('.jt-from', b[0]).value, pivot)) || a[1] - b[1]).map(a => a[0]);
+      if (sorted.some((x, i) => x !== rows[i])) { sorted.forEach(x => ops.appendChild(x)); toast('Activities put in time order', false); }
+    };
+    const grow = d => { d.style.height = 'auto'; d.style.height = d.scrollHeight + 'px'; };
+    const wire = () => {
+      $$('.jt-op', main).forEach(x => {
+        const fr = $('.jt-from', x), d = $('.jt-desc', x);
+        fr.oninput = durations; fr.onchange = () => { sortRows(); durations(); autoSum(); keep(); };
+        d.oninput = () => { grow(d); durations(); autoSum(); }; grow(d);
+        $('[data-oprm]', x).onclick = () => { if ($$('.jt-op', main).length > 1) x.remove(); else { fr.value = ''; d.value = ''; } durations(); autoSum(); keep(); };
+      });
+    };
+    wire(); durations();
+    const addRow = (from, focusDesc) => { ops.insertAdjacentHTML('beforeend', this.opRow({ from, desc: '' })); wire(); const last = $$('.jt-op', main).pop(); sortRows(); durations();
+      (focusDesc ? $('.jt-desc', last) : $('.jt-from', last)).focus(); keep(); };
+    $('#jt-addop', main).onclick = () => addRow('', false);
+    $('#jt-now', main).onclick = () => { const empty = $$('.jt-op', main).find(x => !$('.jt-from', x).value && !$('.jt-desc', x).value.trim());
+      if (empty) { $('.jt-from', empty).value = jtNowHM(); sortRows(); durations(); $('.jt-desc', empty).focus(); keep(); } else addRow(jtNowHM(), true); };
+    endIn.oninput = durations; endIn.onchange = () => { durations(); keep(); };
+    $('#jt-endnow', main).onclick = () => { endIn.value = jtNowHM(); durations(); keep(); };
     $$('.jt-eqseg', main).forEach(s => $$('button', s).forEach(b => b.onclick = () => { $$('button', s).forEach(x => x.className = ''); b.className = 'on ' + JT_EQ[b.dataset.v][0]; keep(); }));
     $('#jt-dor', main).addEventListener('input', keep); $('#jt-dor', main).addEventListener('change', keep);
+    // the HSE part
+    const rem = $('#jt-hserem', main); if (rem) rem.onclick = async () => { try { const who = await q(sb.rpc('jt_hse_remind', { p_id: r.id })); toast(`${who} has been reminded`); rem.disabled = true; } catch (e) { toast(niceError(e), true); } };
+    const mine = $('#jt-hsemine', main); if (mine) mine.onclick = () => { const cur = this.collect(main); this.behalf = true;
+      $('#jt-hsebox', main).outerHTML = this.hseSection(r.hse_at ? r : { ...r, man_hours: r.man_hours ?? cur.man_hours ?? '', hse_comment: r.hse_comment || 'No incident / accident' }); this.bindHse(main, keep); keep(); };
+    this.bindHse(main, keep);
     const dis = $('#jt-discard', main); if (dis) dis.onclick = () => { try { localStorage.removeItem(this.key); } catch (e) { } render({ quiet: true }); };
     const aw = $('#jt-addwell2', main); if (aw) aw.onclick = async e => { e.preventDefault(); keep(); const id = await jtWellForm(this.j); if (id) { this.j = await q(sb.rpc('jt_job_get', { p_id: this.j.id })); } };
     const save = async submit => {
-      const p = this.collect(main);
+      sortRows(); const p = this.collect(main);
       if (!p.well_id) return toast('Choose the well (add it first if it’s new).', true);
-      if (submit) { const miss = (this.j.groups || []).filter(g => !p.equipment[g]); if (miss.length) return toast('Set the equipment status for ' + miss.join(', '), true); if (!p.summary.trim()) return toast('Write the daily operations summary first', true); }
+      if (submit) {
+        if (!p.ops.length) return toast('Add the day’s activities first', true);
+        if (p.ops.some(o => !jtTm(o.from))) return toast('Give each activity its start time', true);
+        if (!p.day_end) return toast('Give the time the day ended (when the last activity finished)', true);
+        const miss = (this.j.groups || []).filter(g => !p.equipment[g]); if (miss.length) return toast('Set the equipment status for ' + miss.join(', '), true);
+        if (!String(p.summary || '').trim()) return toast('Write the daily operations summary first', true);
+        if (p.hse && (p.hse.man_hours === '' || !String(p.hse.hse_comment || '').trim())) return toast('Fill the HSE section (man-hours and the HSE comment) first', true);
+        if (!p.hse && !r.hse_at) return toast(`The HSE section isn’t filled yet. Ask ${r.hse_name || 'the HSE person'} to fill it, or fill it on their behalf.`, true);
+      }
       try {
         const id = await q(sb.rpc('jt_report_save', { p }));
         if (submit) await q(sb.rpc('jt_report_submit', { p_id: id }));
@@ -596,32 +786,65 @@ const jtReport = {
       render({ quiet: true });
     };
     $$('[data-phdel]', main).forEach(b => b.onclick = async () => { if (!confirm('Remove this photo?')) return; try { await q(sb.rpc('jt_file_delete', { p_id: +b.dataset.phdel })); render({ quiet: true }); } catch (e) { toast(niceError(e), true); } });
+  },
+  bindHse(main, keep) {
+    const undo = $('#jt-hseundo', main); if (undo) undo.onclick = () => { this.behalf = false; $('#jt-hsebox', main).outerHTML = this.hseSection(this.r);
+      const again = $('#jt-hsemine', main); if (again) again.onclick = () => { this.behalf = true; $('#jt-hsebox', main).outerHTML = this.hseSection(this.r.hse_at ? this.r : { ...this.r, man_hours: this.r.man_hours ?? '', hse_comment: this.r.hse_comment || 'No incident / accident' }); this.bindHse(main, keep); keep(); };
+      const rem = $('#jt-hserem', main); if (rem) rem.onclick = async () => { try { const who = await q(sb.rpc('jt_hse_remind', { p_id: this.r.id })); toast(`${who} has been reminded`); rem.disabled = true; } catch (e) { toast(niceError(e), true); } };
+      keep(); };
   }
 };
 
-// ---------------------------------------------------------------- Copy for WhatsApp
-function jtWhatsAppText(r, j) {
-  const lines = [];
-  lines.push(`*Daily Operation Report: ${r.well || ''}*`);
-  lines.push(`${jtDay(r.report_date)}${r.report_no ? ` · Report ${r.report_no}` : ''}`);
-  lines.push(`${j.client?.short_name || j.client?.name || ''} · ${j.project || j.job_no}`);
-  lines.push('');
-  if (r.summary) { lines.push('*Summary (24 hr)*'); lines.push(r.summary.trim()); lines.push(''); }
-  const ops = (r.ops || []).filter(o => o.desc || o.from);
-  if (ops.length) { lines.push('*Operations*'); ops.forEach(o => lines.push(`${o.from || ''}–${o.to || ''} ${o.desc || ''}`.trim())); lines.push(''); }
-  const eq = (j.groups || []).map(g => `${g} ${JT_EQ[r.equipment?.[g]]?.[1] || '—'}`).join(' · ');
-  if (eq) lines.push(`*Equipment:* ${eq}`);
-  lines.push(`*HSE:* ${r.hse_comment || 'No incident / accident'}${r.man_hours ? ` · ${jtNum(r.man_hours)} man-hours` : ''}${r.lti_days != null ? ` · ${r.lti_days} days without LTI` : ''}`);
-  if (r.pob_client != null || r.pob_gankco != null || r.pob_others != null) lines.push(`*POB:* Client ${r.pob_client ?? 0} · GANKCO ${r.pob_gankco ?? 0} · Others ${r.pob_others ?? 0}`);
-  if (r.look_ahead) { lines.push(''); lines.push(`*Look ahead:* ${r.look_ahead.trim()}`); }
-  return lines.join('\n');
+// ---------------------------------------------------------------- Copy for WhatsApp, in the operations group's own format
+// *Update on Olomoro 8S TTSHO Operation Update - OML30*
+// *27th July, 2026*  • activity  • activity  *Weather Condition*  Calm and Cloudy   (then the next day)
+const jtOrd = n => n + (n % 100 >= 11 && n % 100 <= 13 ? 'th' : ['th', 'st', 'nd', 'rd'][n % 10] || 'th');
+const jtWaDate = d => { const x = new Date(d + 'T00:00:00'); return `${jtOrd(x.getDate())} ${x.toLocaleDateString('en-GB', { month: 'long' })}, ${x.getFullYear()}`; };
+const jtWaTitle = (j, well, field, t) => String(t || j.wa_title || JT_WA_DEFAULT).replace(/\{well\}/gi, well || '').replace(/\{job type\}/gi, j.job_type || '').replace(/\{field\}/gi, field || j.field || '')
+  .replace(/\{client\}/gi, j.client?.short_name || j.client?.name || '').replace(/\{job no\}/gi, j.job_no || '').replace(/\s+/g, ' ').replace(/\s+-\s*$/, '').trim();
+function jtWhatsAppText(days, j, well, field, title) {
+  const out = [`*${jtWaTitle(j, well, field, title)}*`];
+  days.forEach(d => {
+    out.push('', `*${jtWaDate(d.report_date)}*`);
+    (d.ops || []).filter(o => String(o.desc || '').trim()).forEach(o => out.push('• ' + String(o.desc).replace(/\s*\n\s*/g, ' ').trim()));
+    if (String(d.weather || '').trim()) out.push('', '*Weather Condition*', String(d.weather).trim());
+  });
+  return out.join('\n');
 }
-function jtShareWhatsApp(r, j) {
-  const t = jtWhatsAppText(r, j);
-  modal({ title: 'Copy for WhatsApp', submit: null, cancel: 'Close', sub: 'Paste this into the operations group. Nothing is sent from Nest.',
-    body: `<textarea class="jt-wa" rows="14" readonly>${esc(t)}</textarea><div class="actionrow"><button type="button" class="btn primary" id="jt-wacopy">${ico('chat')}Copy</button>
-      <a class="btn" target="_blank" rel="noopener" href="https://wa.me/?text=${encodeURIComponent(t)}">Open WhatsApp</a></div>`,
-    onOpen: d => { $('#jt-wacopy', d).onclick = async () => { try { await navigator.clipboard.writeText(t); } catch (e) { const ta = $('.jt-wa', d); ta.select(); document.execCommand('copy'); } toast('Copied. Paste it into WhatsApp.'); }; } });
+async function jtShareWhatsApp(r, j) {
+  // the well's days so far (this report as it is on screen)
+  let days = [];
+  try { days = r.well_id ? await q(sb.from('jt_reports').select('id,report_date,ops,weather').eq('job_id', j.id).eq('well_id', r.well_id).order('report_date')) : []; } catch (e) { days = []; }
+  days = days.filter(d => d.report_date !== r.report_date && d.id !== r.id); days.push({ id: r.id, report_date: r.report_date, ops: r.ops, weather: r.weather });
+  days.sort((a, b) => a.report_date.localeCompare(b.report_date));
+  const field = r.well_field || j.wells?.find(w => w.id === r.well_id)?.field || j.field;
+  const canTitle = jtAdmin() || j.lead_id === S.profile.id;
+  modal({ title: 'Copy for WhatsApp', submit: null, cancel: 'Close', sub: 'In the operations group’s format. Copy it again after each new activity and paste the latest version. Nothing is sent from Nest.', wide: true,
+    body: `<div class="jt-wagrid"><div>
+        <div class="segi" id="jt-wawhich"><label><input type="radio" name="which" value="today" checked><span>This day</span></label><label><input type="radio" name="which" value="pick"><span>Pick days</span></label><label><input type="radio" name="which" value="all"><span>The whole well so far</span></label></div>
+        <div class="checklist jt-wadays" hidden>${days.map(d => `<label class="checkrow"><input type="checkbox" data-d="${d.report_date}" ${d.report_date === r.report_date ? 'checked' : ''}><span><b>${esc(jtDay(d.report_date))}</b></span></label>`).join('')}</div>
+        <label class="f mt">Title<input name="wa_title" value="${esc(j.wa_title || JT_WA_DEFAULT)}"><span class="hint">{well} becomes ${esc(r.well || 'the well')}.</span></label>
+        ${canTitle ? `<label class="check"><input type="checkbox" name="keep_title"> Use this title for this job from now on</label>` : ''}</div>
+      <div><textarea class="jt-wa" rows="16" readonly></textarea></div></div>
+      <div class="actionrow"><button type="button" class="btn primary" id="jt-wacopy">${ico('chat')}Copy</button><a class="btn" target="_blank" rel="noopener" id="jt-waopen">Open WhatsApp</a></div>`,
+    onOpen: d => {
+      const ta = $('.jt-wa', d), ti = $('[name=wa_title]', d);
+      const draw = () => {
+        const w = $('[name=which]:checked', d).value; $('.jt-wadays', d).hidden = w !== 'pick';
+        const pick = w === 'today' ? days.filter(x => x.report_date === r.report_date) : w === 'all' ? days : days.filter(x => $(`[data-d="${x.report_date}"]`, d)?.checked);
+        ta.value = jtWhatsAppText(pick, j, r.well, field, ti.value); $('#jt-waopen', d).href = 'https://wa.me/?text=' + encodeURIComponent(ta.value);
+      };
+      $$('[name=which]', d).forEach(x => x.onchange = draw); $$('[data-d]', d).forEach(x => x.onchange = draw); ti.oninput = draw; draw();
+      $('#jt-wacopy', d).onclick = async () => {
+        try { await navigator.clipboard.writeText(ta.value); } catch (e) { ta.select(); document.execCommand('copy'); }
+        toast('Copied. Paste it into the WhatsApp group.');
+        const kt = $('[name=keep_title]', d);
+        if (kt?.checked && ti.value.trim() !== (j.wa_title || JT_WA_DEFAULT)) {
+          try { const full = await q(sb.rpc('jt_job_get', { p_id: j.id })); await q(sb.rpc('jt_job_save', { p: { ...full, client_id: full.client_id, groups: full.groups, wa_title: ti.value.trim() } })); j.wa_title = ti.value.trim(); kt.checked = false; }
+          catch (e) { toast(niceError(e), true); }
+        }
+      };
+    } });
 }
 
 // ================================================================ TICKETS
@@ -874,8 +1097,16 @@ const jtSettingsPage = {
     await jtLoad(true);
     if (!jtAdmin() && !isSuper()) return topbar('JobTrack settings') + '<div class="notice">Only JobTrack admins change these.</div>';
     const c = S.jt.cfg;
-    return topbar('JobTrack settings', 'Equipment groups, who approves tickets, and emails.') +
-      `<form id="jts-groups"><section class="panel" id="groups"><header><h2>Equipment groups</h2><span class="meta">${esc(jtGroups().join(', '))}</span></header><div class="body">
+    const yr = new Date().getFullYear();
+    return topbar('JobTrack settings', 'Jobs and their numbers, equipment groups, who approves tickets, and emails.') +
+      `<form id="jts-jobs"><section class="panel" id="jobs"><header><h2>Jobs</h2><span class="meta">Next: GES-JT-OPR-${String(c.next_job || 1).padStart(4, '0')}-${yr}</span></header><div class="body">
+        <div class="row2"><label class="f">Who can start a job<select name="who_starts">${opt('any', 'Any engineer (they lead the job)', c.who_starts || 'any')}${opt('admins', 'Operations managers only (JobTrack admins)', c.who_starts || 'any')}</select>
+          <span class="hint">So a job can start when the operations manager isn’t around. Leads manage their job’s crew and ticket items.</span></label>
+          <label class="f">Next job number<input type="number" name="next_no" min="${(c.last_job || 0) + 1}" step="1" value="${esc(c.next_job || 1)}">
+            <span class="hint">Next job: <b id="jts-nprev">GES-JT-OPR-${String(c.next_job || 1).padStart(4, '0')}-${yr}</b>. ${c.last_job ? `It can’t be ${c.last_job} or lower (already used).` : ''} Numbers carry on into a new year; only the year changes.</span></label></div>
+        <label class="switch pc-sw"><input type="checkbox" name="tell_ops" ${c.tell_ops !== false ? 'checked' : ''}><span class="sw"></span><span><b>Tell the operations managers when an engineer starts a job</b><span class="sub muted">A Nest notification to every JobTrack admin.</span></span></label>
+        <div class="acc-save"><button class="btn primary" type="submit">Save</button></div></div></section></form>
+      <form id="jts-groups"><section class="panel" id="groups"><header><h2>Equipment groups</h2><span class="meta">${esc(jtGroups().join(', '))}</span></header><div class="body">
         <p class="muted">New jobs start with these. Each day’s report sets each one to Op, Stdby, Mob, Demob or Off, and tickets count days from them.</p>
         <div id="jts-g">${jtGroups().map(g => `<div class="jt-grow"><input name="g" value="${esc(g)}"><button type="button" class="btn small" data-grm>${ico('trash')}</button></div>`).join('')}</div>
         <button type="button" class="btn small" id="jts-gadd">${ico('plus')}Add a group</button>
@@ -898,6 +1129,10 @@ const jtSettingsPage = {
     const saveIt = async p => { try { await q(sb.rpc('jt_settings_save', { p })); await jtLoad(true); toast('Saved'); render({ quiet: true }); } catch (e) { toast(niceError(e), true); } };
     $('#jts-groups', main).onsubmit = e => { e.preventDefault(); saveIt({ groups: $$('[name=g]', gbox).map(x => x.value.trim()).filter(Boolean) }); };
     $('#jts-appr', main).onsubmit = e => { e.preventDefault(); saveIt({ approvers: (S.jt.cfg.admins || []).filter(a => $(`[name="a_${a.id}"]`, main)?.checked).map(a => a.id) }); };
+    const jf = $('#jts-jobs', main);
+    jf.next_no.oninput = () => { const n = Math.max(1, +jf.next_no.value || 1); $('#jts-nprev', main).textContent = `GES-JT-OPR-${String(n).padStart(4, '0')}-${new Date().getFullYear()}`; };
+    jf.onsubmit = e => { e.preventDefault(); const p = { who_starts: jf.who_starts.value, tell_ops: jf.tell_ops.checked };
+      if (+jf.next_no.value !== +S.jt.cfg.next_job) p.next_no = +jf.next_no.value; saveIt(p); };
     $('#jts-mail', main).onsubmit = e => { e.preventDefault(); const f = e.target; saveIt({ emails_on: f.emails_on.checked, reminder_on: f.reminder_on.checked, reminder_hour: +f.reminder_hour.value }); };
   }
 };

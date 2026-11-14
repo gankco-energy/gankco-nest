@@ -18,12 +18,16 @@ async function loadMaint() {
   try { S.maint.wins = await q(sb.from('maintenance_windows').select('*').is('ended_at', null).order('starts_at')); }
   catch (e) { S.maint.wins = []; }
 }
-const mTesters = () => { const t = setting('maintenance_testers', []); return Array.isArray(t) ? t : []; };
-const maintExempt = () => realSuper() || mTesters().includes(S.profile?.id);
+// 3.0.9: each app has its own testers (Nest settings → Apps in testing). They can use that app while it's in testing or under maintenance.
+const TEST_APPS = { people: 'PeopleCore', jobtrack: 'JobTrack', inventory: 'Inventory', po: 'Purchase Order' };
+const appTestCfg = () => { const c = setting('app_testing', null); return c && typeof c === 'object' ? c : {}; };
+const mTesters = (scope = 'all') => { const c = appTestCfg();
+  return scope === 'all' || scope === 'launcher' ? [...new Set(Object.values(c).flatMap(a => a?.testers || []))] : (c[scope]?.testers || []); };
+const maintExempt = (scope = 'all') => realSuper() || mTesters(scope).includes(S.profile?.id);
 const mStarted = w => new Date(w.starts_at) <= new Date();
 // the window that affects an app right now ('all' windows affect every app)
 const maintWin = scope => S.maint.wins.find(w => mStarted(w) && (w.scope === 'all' || w.scope === scope));
-const maintLocked = scope => { const w = scope === 'all' ? S.maint.wins.find(w => mStarted(w) && w.scope === 'all') : maintWin(scope); return w && !maintExempt() ? w : null; };
+const maintLocked = scope => { const w = scope === 'all' ? S.maint.wins.find(w => mStarted(w) && w.scope === 'all') : maintWin(scope); return w && !maintExempt(scope) ? w : null; };
 const mNoticeWins = scope => S.maint.wins.filter(w => !mStarted(w) && w.notice_from && new Date(w.notice_from) <= new Date() && (w.scope === 'all' || scope === 'launcher' || w.scope === scope));
 const mDismissed = id => { try { return (JSON.parse(localStorage.getItem('nest.mdismiss') || '[]')).includes(id); } catch (e) { return false; } };
 const mDismiss = id => { try { const a = JSON.parse(localStorage.getItem('nest.mdismiss') || '[]'); a.push(id); localStorage.setItem('nest.mdismiss', JSON.stringify(a.slice(-30))); } catch (e) { } };
@@ -48,7 +52,7 @@ function maintGate(r) {
 }
 function renderMaintScreen(w, scope) {
   S.shellReady = false; S.maint.screen = scope;
-  const app = scope === 'all' ? 'Nest' : MAINT_APPS[w.scope];
+  const app = scope === 'all' ? 'Nest' : MAINT_APPS[scope] || MAINT_APPS[w.scope];
   const back = mBack(w);
   const msg = w.message || (scope === 'all' ? 'Nest is being updated to a new version. Your data is safe.' : `The ${app} app is being updated. Your data is safe.`);
   $('#app').innerHTML = `<div class="maint-screen" role="main"><div class="maint-card"><img class="eagle" src="brand/mark.png" alt=""><div>${wordmark()}<div class="sublock">NEST</div></div>
@@ -65,9 +69,9 @@ function renderMaintScreen(w, scope) {
 // Banners: heads-up before maintenance, and the "maintenance is on" bar for the Developer and testers
 function maintBars(scope, inApp) {
   let h = '';
-  const on = maintExempt() ? (scope === 'launcher' ? S.maint.wins.filter(mStarted) : [maintWin(scope)].filter(Boolean)) : [];
+  const on = maintExempt(scope) ? (scope === 'launcher' ? S.maint.wins.filter(mStarted) : [maintWin(scope)].filter(Boolean)) : [];
   on.forEach(w => {
-    const names = mTesters().map(id => personName(id)).filter(Boolean);
+    const names = mTesters(w.scope).map(id => personName(id)).filter(Boolean);
     h += `<div class="mbanner on${inApp ? ' inapp' : ''}"><span class="mb-ico">${I_WRENCH}</span><span><b>${w.scope === 'all' ? 'Maintenance mode is on' : `${esc(MAINT_APPS[w.scope])} is under maintenance`}</b> · only ${realSuper() ? 'you' : 'the Developer'}${names.length ? ` and testers (${esc(names.join(', '))})` : ''} can use ${w.scope === 'all' ? 'Nest' : 'it'}. Everyone else sees the maintenance screen${mBack(w) && mBack(w) !== 'late' ? ` until ${esc(mBack(w))}` : ''}.</span>
       ${realSuper() ? `<button class="btn small" data-mend="${w.id}">Turn off maintenance</button>` : ''}</div>`;
   });
@@ -92,8 +96,8 @@ function bindMaintBars(root) {
 function maintTile(scope) {
   const w = maintWin(scope); if (!w) return null;
   const back = mBack(w);
-  return { cls: maintExempt() ? 'maint-open' : 'maint', badge: `<span class="t-maint">${I_WRENCH}Under maintenance</span>`,
-    meta: maintExempt() ? `${I_CLOCK}Testers only · back by ${back && back !== 'late' ? esc(back) : 'soon'}` : `${I_CLOCK}${back === 'late' ? 'Back soon' : back ? 'Back by ' + esc(back) : 'Back soon'}` };
+  return { cls: maintExempt(scope) ? 'maint-open' : 'maint', badge: `<span class="t-maint">${I_WRENCH}Under maintenance</span>`,
+    meta: maintExempt(scope) ? `${I_CLOCK}Testers only · back by ${back && back !== 'late' ? esc(back) : 'soon'}` : `${I_CLOCK}${back === 'late' ? 'Back soon' : back ? 'Back by ' + esc(back) : 'Back soon'}` };
 }
 // Live changes and the clock
 async function onMaintChange() {
@@ -113,7 +117,6 @@ setInterval(() => { if (S.session && isActive() && !S.gate) onMaintChange(); }, 
 // ================================================================ MAINTENANCE: Settings panel (Developer)
 function maintPanel() {
   const wins = S.maint.wins;
-  const testers = mTesters().map(id => personName(id)).filter(Boolean);
   const card = w => {
     const started = mStarted(w), back = mBack(w);
     return `<div class="mwin ${started ? 'on' : ''}">
@@ -128,13 +131,11 @@ function maintPanel() {
       <div class="right"><button class="btn small primary" type="button" id="m-new">${I_WRENCH}Schedule maintenance</button></div></header><div class="body">
     <p class="muted">Lock all of Nest or a single app while you update it. People see a maintenance screen with your message and the time it’s back, and nothing can be saved until you end it. You and your testers can still use Nest to check the update.</p>
     ${wins.length ? `<div class="mwins">${wins.map(card).join('')}</div>` : ''}
-    <div class="mtesters"><div><b>Testers</b><div class="sub">${testers.length ? esc(testers.join(', ')) : 'No testers yet. Only you can use Nest during maintenance.'}</div></div>
-      <button class="btn small" type="button" id="m-test">${ico('users')}Choose testers</button></div></div></section>`;
+    <div class="mtesters"><div><b>Testers</b><div class="sub">Each app’s testers can use that app while it’s under maintenance. Choose them under <a href="#/settings#apptest">Apps in testing</a>.</div></div></div></div></section>`;
 }
 function bindMaintPanel(main) {
   bindMaintBars(main);
   const nw = $('#m-new', main); if (nw) nw.onclick = scheduleMaint;
-  const tt = $('#m-test', main); if (tt) tt.onclick = chooseTesters;
   $$('[data-mext]', main).forEach(b => b.onclick = async () => {
     try { await q(sb.rpc('extend_maintenance', { p_id: +b.dataset.mext, p_minutes: +b.dataset.min })); await loadMaint(); toast(`Back-by time moved ${b.dataset.min} minutes later`); render({ quiet: true }); }
     catch (e) { toast(niceError(e), true); }
@@ -179,20 +180,6 @@ function scheduleMaint() {
     }
   });
 }
-function chooseTesters() {
-  const cur = new Set(mTesters());
-  const ppl = Object.values(S.people).filter(p => p.role === 'staff').sort((a, b) => (a.full_name || a.email).localeCompare(b.full_name || b.email));
-  return modal({
-    title: 'Testers', submit: 'Save testers',
-    sub: 'Testers can use Nest during maintenance, to help check an update before everyone comes back.',
-    body: ppl.length ? `<div class="checklist">${ppl.map(p => `<label class="checkrow"><input type="checkbox" name="t_${p.id}" ${cur.has(p.id) ? 'checked' : ''}><span><b>${esc(p.full_name || p.email)}</b><span class="sub">${esc(ROLE_LABEL[p.role])}${p.job_title ? ' · ' + esc(p.job_title) : ''}</span></span></label>`).join('')}</div>` : '<div class="empty">No admins or staff yet.</div>',
-    onSubmit: async x => {
-      const ids = Object.keys(x).filter(k => k.startsWith('t_') && x[k]).map(k => k.slice(2));
-      await q(sb.rpc('set_maintenance_testers', { p_ids: ids })); await loadLookups(); toast(ids.length ? `${plural(ids.length, 'tester')} saved` : 'No testers'); render({ quiet: true });
-    }
-  });
-}
-
 // ================================================================ ALERT EMAILS: Settings panel (Developer)
 async function alertsPanel() {
   const a = setting('alerts', {}) || {};
@@ -265,28 +252,45 @@ function bindMyAlerts(main) {
   };
 }
 
-// ================================================================ 3.0.4 PEOPLECORE: under construction (Settings panel, Developer)
-function peopleBuildPanel() {
-  const c = setting('people_construction', null) || { on: true, testers: [] };
-  const testers = (c.testers || []).map(id => personName(id)).filter(Boolean);
-  return `<section class="panel" id="peoplebuild"><header><h2>PeopleCore</h2>${c.on ? chip('pending', 'Under construction') : chip('ok', 'Open')}</header><div class="body">
-    <p class="muted">${c.on ? 'PeopleCore shows as <b>under construction</b>. Only you and the testers you tick can open it; everyone else sees an under-construction screen.' : 'PeopleCore is open to everyone you’ve given the app to.'}</p>
-    <div class="mtesters"><div><b>Testers</b><div class="sub">${testers.length ? esc(testers.join(', ')) : 'No testers yet. Only you can open PeopleCore.'}</div></div>
-      <button class="btn small" type="button" id="pb-test">${ico('users')}Choose testers</button></div>
-    <div class="actionrow mt"><button class="btn small ${c.on ? 'primary' : ''}" type="button" id="pb-toggle">${c.on ? 'Open PeopleCore to everyone' : 'Put back under construction'}</button></div></div></section>`;
+// ================================================================ 3.0.9 APPS IN TESTING (Settings panel, Developer)
+// PeopleCore and JobTrack can be in testing: only you and their testers can open them. Every app's testers can also use it during maintenance.
+function appsTestingPanel() {
+  const c = appTestCfg(); const apps = Object.keys(TEST_APPS);
+  const ids = [...new Set(apps.flatMap(a => c[a]?.testers || []))].filter(id => S.people[id]).sort((x, y) => personName(x).localeCompare(personName(y)));
+  const testing = apps.filter(a => c[a]?.on);
+  return `<section class="panel" id="apptest"><header><h2>Apps in testing</h2>${testing.length ? chip('pending', testing.map(a => TEST_APPS[a]).join(', ') + ' in testing') : chip('ok', 'All live')}</header><div class="body">
+    <p class="muted">An app in testing shows only for you and the testers ticked for it. Everyone else sees that it’s being tested. Each app’s testers can also use it while it’s under maintenance. Testers still need the app switched on for them (Team &amp; access).</p>
+    <div class="tablewrap"><table class="t apptest"><thead><tr><th>App</th>${apps.map(a => `<th>${esc(TEST_APPS[a])}</th>`).join('')}</tr></thead><tbody>
+      <tr class="at-status"><td><b>Status</b></td>${apps.map(a => ['people', 'jobtrack'].includes(a)
+        ? `<td><div class="seg at-seg" data-app="${a}"><button type="button" data-v="1" class="${c[a]?.on ? 'on' : ''}">Testing</button><button type="button" data-v="0" class="${c[a]?.on ? '' : 'on'}">Live</button></div></td>`
+        : `<td>${chip('ok', 'Live')}</td>`).join('')}</tr>
+      ${ids.map(id => `<tr data-tester="${id}"><td><b>${esc(personName(id))}</b><div class="sub">${esc(S.people[id]?.job_title || S.people[id]?.email || '')}</div></td>
+        ${apps.map(a => `<td><label class="check at-chk"><input type="checkbox" data-a="${a}" ${(c[a]?.testers || []).includes(id) ? 'checked' : ''}${(S.people[id]?.apps || []).includes(a) || (a === 'po' && S.people[id]?.role === 'staff') ? '' : ' title="This app isn’t switched on for them yet"'}><span class="sr">${esc(TEST_APPS[a])}</span></label></td>`).join('')}</tr>`).join('')
+        || `<tr><td colspan="${apps.length + 1}" class="muted">No testers yet. Add someone below.</td></tr>`}
+    </tbody></table></div>
+    <div class="actionrow mt"><select id="at-add" class="inline"><option value="">Add a tester…</option>${Object.values(S.people).filter(p => p.role === 'staff' && !ids.includes(p.id)).sort((x, y) => (x.full_name || x.email).localeCompare(y.full_name || y.email)).map(p => `<option value="${p.id}">${esc(p.full_name || p.email)}</option>`).join('')}</select>
+      <span class="right"><button class="btn primary" type="button" id="at-save">Save</button></span></div></div></section>`;
 }
-function bindPeopleBuild(main) {
-  const c = setting('people_construction', null) || { on: true, testers: [] };
-  const save = async (on, ids) => { await q(sb.rpc('set_people_construction', { p_on: on, p_testers: ids })); await loadLookups(); };
-  const t = $('#pb-toggle', main); if (t) t.onclick = async () => {
-    if (c.on && !confirm('Open PeopleCore to everyone who has the app?')) return;
-    try { await save(!c.on, c.testers || []); toast(c.on ? 'PeopleCore is open' : 'PeopleCore is under construction again'); render({ quiet: true }); } catch (e) { toast(niceError(e), true); }
+function bindAppsTesting(main) {
+  const box = $('#apptest', main); if (!box) return;
+  $$('.at-seg', box).forEach(sg => $$('button', sg).forEach(b => b.onclick = () => $$('button', sg).forEach(x => x.classList.toggle('on', x === b))));
+  const add = $('#at-add', box); add.onchange = () => {
+    const id = add.value; if (!id) return; const tb = $('tbody', box); const empty = $('td[colspan]', tb); if (empty) empty.parentElement.remove();
+    tb.insertAdjacentHTML('beforeend', `<tr data-tester="${id}"><td><b>${esc(personName(id))}</b><div class="sub">${esc(S.people[id]?.job_title || S.people[id]?.email || '')}</div></td>
+      ${Object.keys(TEST_APPS).map(a => `<td><label class="check at-chk"><input type="checkbox" data-a="${a}"><span class="sr">${esc(TEST_APPS[a])}</span></label></td>`).join('')}</tr>`);
+    add.querySelector(`option[value="${id}"]`).remove(); add.value = '';
   };
-  const b = $('#pb-test', main); if (b) b.onclick = () => {
-    const cur = new Set(c.testers || []);
-    const ppl = Object.values(S.people).filter(p => p.role === 'staff').sort((x, y) => (x.full_name || x.email).localeCompare(y.full_name || y.email));
-    return modal({ title: 'PeopleCore testers', submit: 'Save testers', sub: 'Testers can open PeopleCore while it’s under construction. They also need the PeopleCore app switched on (Team & access).',
-      body: ppl.length ? `<div class="checklist">${ppl.map(p => `<label class="checkrow"><input type="checkbox" name="t_${p.id}" ${cur.has(p.id) ? 'checked' : ''}><span><b>${esc(p.full_name || p.email)}</b><span class="sub">${esc(p.job_title || p.email)}${(p.apps || []).includes('people') ? '' : ' · PeopleCore app off'}</span></span></label>`).join('')}</div>` : '<p class="muted">No staff yet.</p>',
-      onSubmit: async x => { const ids = Object.keys(x).filter(k => k.startsWith('t_') && x[k]).map(k => k.slice(2)); await save(c.on, ids); toast(ids.length ? `${plural(ids.length, 'tester')} saved` : 'No testers'); render({ quiet: true }); } });
+  $('#at-save', box).onclick = async () => {
+    const c = appTestCfg();
+    const wantOn = a => { const sg = $(`.at-seg[data-app="${a}"]`, box); return sg ? $('button.on', sg)?.dataset.v === '1' : false; };
+    const goingLive = Object.keys(TEST_APPS).filter(a => c[a]?.on && !wantOn(a));
+    if (goingLive.length && !confirm(`Open ${goingLive.map(a => TEST_APPS[a]).join(' and ')} to everyone who has ${goingLive.length > 1 ? 'them' : 'it'}?`)) return;
+    try {
+      for (const a of Object.keys(TEST_APPS)) {
+        const ids = $$('tr[data-tester]', box).filter(r => $(`input[data-a="${a}"]`, r)?.checked).map(r => r.dataset.tester);
+        await q(sb.rpc('set_app_testing', { p_app: a, p_on: wantOn(a), p_testers: ids }));
+      }
+      await loadLookups(); toast('Saved'); render({ quiet: true });
+    } catch (e) { toast(niceError(e), true); }
   };
 }

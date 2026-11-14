@@ -1,4 +1,4 @@
-# GANKCO Nest: version 3.0.8 (JobTrack: field jobs, daily operation reports and job tickets)
+# GANKCO Nest: version 3.0.9 (JobTrack field feedback, and apps in testing)
 
 *Built to support engineered solutions.*
 
@@ -8,6 +8,28 @@
 - **Database and sign-in:** Supabase project in the **GANKCO Energy Services** organization (Nest Gmail; Ehis also an Owner).
 - **Emails:** sent by Brevo from **nest-alerts@gankcoenergy.com** as "GANKCO Nest". Sign-in emails use Supabase's custom SMTP (templates in Supabase → Authentication → Emails → Templates). Alert emails use the Brevo API key saved in Supabase Vault as `brevo_api_key`, on a schedule (pg_cron).
 - **DNS (company IT):** `nest` CNAME → `gankco-energy.github.io`, plus the Brevo verification records.
+
+## Install 3.0.9 (about 3 minutes)
+
+3.0.8 must already be installed.
+
+1. **Supabase → SQL Editor:** open a **New query**, paste the whole of **`25-nest-v3.0.9-upgrade.sql`**, press **Run**. It ends with **Nest 3.0.9 installed**. It is all-or-nothing and safe to run again.
+2. **GitHub:** unzip **`gankco-nest-v3.0.9.zip`** and upload everything into **github.com/gankco-energy/gankco-nest**, then commit. Keep the `CNAME` file.
+3. Reload Nest (**Ctrl + Shift + R**). The footer says **v3.0.9**.
+4. **Nest settings → Apps in testing:** check the testers. Your old maintenance testers are now testers of Inventory, Purchase Order and JobTrack (and of PeopleCore only if it was already open). Put **JobTrack** in *Testing* if you want only certain people in it for now.
+5. **JobTrack → JobTrack settings → Jobs:** set the **next job number** if it should not carry on from the last one, and choose who can start a job.
+6. **On each job's crew**, tick **HSE** for the HSE person on board. They need JobTrack as an **Engineer**.
+
+### What's new in 3.0.9
+- **Activities with a start time only.** Each activity runs until the next one starts; the last one until **Day ended at** (left blank until the crew stops; usually 18:00). A **Now** button fills the current time, rows keep themselves in time order, and a time before the day's start counts as after midnight.
+- **The Daily Operations Summary writes itself** from the activities (the work steps, without routine lines like arrival, PTW/JHA, housekeeping and departure, and without the readings at each depth). It can be edited; edits are kept unless someone presses **Rebuild from activities**.
+- **The DOR is GANKCO's own sheet.** Excel and PDF follow the team's General DOR template exactly (same columns, fonts, borders, layout and logo places, client logos top left, GANKCO top right), with no Nest marks. Times are written the DOR way (6.00, 7.25, total 1.25). Long activities carry onto the next rows as the team does. The PDF is one A4 page, like printing the sheet with *fit on one page*; photos are added as extra pages only when asked. Each report has its own **Excel** button; the job's Excel holds one sheet a day, named like the team's (19-7-26).
+- **HSE filled by the HSE person on board.** Tick HSE on the crew. That person is told when a report opens, sees *HSE section to fill* on the overview, and fills just that part (man-hours, TRI, LTI, HSE comment). The report **can't be sent until HSE is filled**. The lead can **Remind** them, or **Fill it myself** on their behalf (recorded as such). Jobs with no HSE person in Nest work as before.
+- **WhatsApp copy in the group's format:** bold title (set per job, e.g. *Update on {well} TTSHO Operation Update - OML30*), bold date (*27th July, 2026*), activity bullets with no times, then *Weather Condition*. Copy this day, picked days or the whole well so far, and paste the latest version after each new activity. No equipment, HSE or POB. A **Weather condition** box on the report feeds it (it is not on the DOR).
+- **Engineers can start a job** (JobTrack settings → Jobs: any engineer, or operations managers only). They lead the job, and the operations managers get a notification. They can add a new client by name. **Leads manage their job's crew and ticket items**, and edit its details.
+- **Copy crew and ticket items from another job**, when starting a job or from the job's crew panel. POB on a new report is counted from the crew.
+- **Next job number** in JobTrack settings. It can't go below a number already used, and numbers carry on into a new year (only the year changes).
+- **Apps in testing** (Nest settings): PeopleCore and JobTrack can each be in *Testing* with their own testers; everyone else sees that the app is being tested. Each app's testers can also use it while it is under maintenance. This replaces the PeopleCore *under construction* switch and the single maintenance testers list.
 
 ## Install 3.0.8 (about 3 minutes)
 
