@@ -1,4 +1,4 @@
-# GANKCO Nest: version 3.0.11 (JobTrack: the HSE Daily Report, everyone can view, whole-job downloads, works with no signal)
+# GANKCO Nest: version 3.0.12 (JobTrack: ticket PDFs with their receipts or the client-signed copy)
 
 *Built to support engineered solutions.*
 
@@ -8,6 +8,22 @@
 - **Database and sign-in:** Supabase project in the **GANKCO Energy Services** organization (Nest Gmail; Ehis also an Owner).
 - **Emails:** sent by Brevo from **nest-alerts@gankcoenergy.com** as "GANKCO Nest". Sign-in emails use Supabase's custom SMTP (templates in Supabase → Authentication → Emails → Templates). Alert emails use the Brevo API key saved in Supabase Vault as `brevo_api_key`, on a schedule (pg_cron).
 - **DNS (company IT):** `nest` CNAME → `gankco-energy.github.io`, plus the Brevo verification records.
+
+## Install 3.0.12 (about 2 minutes)
+
+3.0.11 must already be installed. There's no SQL this time.
+
+1. **GitHub:** unzip **`gankco-nest-v3.0.12.zip`** and upload everything into **github.com/gankco-energy/gankco-nest**, then commit. Keep the `CNAME` file. (New file: `vendor/pdf-lib.min.js`.)
+2. Reload Nest (**Ctrl + Shift + R**). The footer says **v3.0.12**.
+
+### What's new in 3.0.12
+- **Reimbursables ticket → PDF** asks: **Ticket only**, or **Ticket with receipts and documents**. The second gives one PDF:
+  - the ticket;
+  - a page listing what's attached, which payment each is for, and the page it starts on (payments with no receipt are marked *No receipt uploaded*);
+  - the receipts in payment order, then other documents.
+  - Photos go one per page with a slim heading (e.g. *Receipt for payment 2 · Truck in/out · N 30,000.00*); PDFs go in exactly as uploaded.
+- **Job ticket → PDF** asks: **Ticket only**, or **Ticket with the client-signed copy**.
+- Each download is in the audit log.
 
 ## Install 3.0.11 (about 3 minutes)
 

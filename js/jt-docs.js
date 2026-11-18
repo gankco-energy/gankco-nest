@@ -554,7 +554,7 @@ async function jtBreakdownPdf(j, rows) {
 // ================================================================ THE UNPRICED TICKET
 const JT_ROMAN = ['i', 'ii', 'iii', 'iv', 'v', 'vi', 'vii', 'viii', 'ix', 'x', 'xi', 'xii', 'xiii', 'xiv', 'xv', 'xvi', 'xvii', 'xviii', 'xix', 'xx', 'xxi', 'xxii', 'xxiii', 'xxiv', 'xxv', 'xxvi', 'xxvii', 'xxviii', 'xxix', 'xxx'];
 const jtDateRange = (a, b) => { if (!a) return ''; const f = d => new Date(d + 'T00:00:00').toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' }); return !b || a === b ? f(a) : `${f(a)} - ${f(b)}`; };
-async function jtTicketPdf(t) {
+async function jtTicketPdf(t, withFiles) {
   const doc = await pdfInit('portrait'); const W = doc.internal.pageSize.getWidth();
   const gk = await imageB64('brand/logo-full.png'); const gh = 13, gw = gh * gk.w / gk.h;
   doc.addImage(gk.dataUrl, 'PNG', 10, 9, gw, gh, 'gankco-logo', 'FAST');
@@ -619,7 +619,81 @@ async function jtTicketPdf(t) {
     doc.text(jtTxt(nm || 'Name:'), x + 2, y + 24.5); doc.text(jtTxt(dt ? 'Date: ' + dt : 'Date:'), x + 2, y + 28.3);
   });
   jtFooter(doc, `${t.ticket_no} · ${t.kind === 'reimb' ? 'Reimbursables' : 'Unpriced job ticket'}`);
-  doc.save(jtFile(`${t.ticket_no} ${t.kind === 'reimb' ? 'Reimbursables' : 'Job Ticket'} ${t.well_names.join(' & ')}.pdf`));
+  if (!withFiles) { const name = jtFile(`${t.ticket_no} ${t.kind === 'reimb' ? 'Reimbursables' : 'Job Ticket'} ${t.well_names.join(' & ')}.pdf`); doc.save(name); return name; }
+  return jtTicketBundle(t, doc);
+}
+
+// ---------------------------------------------------------------- 3.0.12: the ticket with what was uploaded to it, in one PDF
+// Reimbursables: the ticket, a list of what's attached, the receipts in payment order, then other documents.
+// Job ticket: the ticket, then the client-signed copy. Photos get a slim heading; PDFs go in exactly as uploaded.
+function jtTicketAttachments(t) {
+  if (t.kind === 'reimb') return [
+    ...(t.lines || []).flatMap((l, i) => (l.receipts || []).map(f => ({ id: f.id, name: f.name, line: i, label: `Receipt for payment ${i + 1} · ${l.description || 'Payment'} · ${jtNaira(l.amount).replace('₦', 'N ')}`, what: `Payment ${i + 1}: ${l.description || ''}` }))),
+    ...(t.files || []).filter(f => f.kind === 'file').map(f => ({ id: f.id, name: f.name, label: `Document · ${f.name}`, what: 'Other document' }))];
+  return (t.files || []).filter(f => f.kind === 'signed').map(f => ({ id: f.id, name: f.name, label: `Client-signed copy · ${t.ticket_no}`, what: 'Client-signed ticket' }));
+}
+const jtB64Bytes = b64 => { const bin = atob(b64); const a = new Uint8Array(bin.length); for (let i = 0; i < bin.length; i++) a[i] = bin.charCodeAt(i); return a; };
+async function jtTicketBundle(t, ticketDoc) {
+  await loadScript('vendor/pdf-lib.min.js'); const L = window.PDFLib;
+  const atts = jtTicketAttachments(t);
+  const rows = atts.length ? await q(sb.from('jt_files').select('id,name,mime,data').in('id', atts.map(a => a.id))) : [];
+  const byId = Object.fromEntries(rows.map(r => [r.id, r]));
+  // each attachment as PDF bytes (a photo becomes one page with its heading); what can't go in is noted on the list
+  for (const a of atts) {
+    const f = byId[a.id]; if (!f) { a.note = 'Not found'; continue; }
+    try {
+      if (/pdf/i.test(f.mime || '') || /\.pdf$/i.test(f.name || '')) { a.bytes = jtB64Bytes(f.data); a.pdf = await L.PDFDocument.load(a.bytes, { ignoreEncryption: true }); a.pages = a.pdf.getPageCount(); }
+      else if (/^image\//i.test(f.mime || '')) { a.pdf = await L.PDFDocument.load(await jtPhotoPage(`data:${f.mime};base64,${f.data}`, a.label, f.name)); a.pages = 1; }
+      else a.note = 'Not a PDF or photo: open it on the ticket in Nest';
+    } catch (e) { a.note = 'Couldn’t be added (the file may be protected or damaged): open it on the ticket in Nest'; a.pdf = null; }
+  }
+  const ticketBytes = ticketDoc.output('arraybuffer');
+  const tPages = (await L.PDFDocument.load(ticketBytes)).getPageCount();
+  // the list of what's attached, with the page each starts on (drawn again if it runs to more pages than guessed)
+  let listBytes = null, listPages = 1;
+  for (let k = 0; k < 3; k++) {
+    let at = tPages + listPages + 1;
+    atts.forEach(a => { a.page = a.pdf ? at : null; if (a.pdf) at += a.pages; });
+    const d = await jtAttachList(t, atts);
+    const n = d.getNumberOfPages(); listBytes = d.output('arraybuffer');
+    if (n === listPages) break; listPages = n;
+  }
+  const out = await L.PDFDocument.create();
+  const add = async src => { const pdf = src instanceof L.PDFDocument ? src : await L.PDFDocument.load(src); (await out.copyPages(pdf, pdf.getPageIndices())).forEach(pg => out.addPage(pg)); };
+  await add(ticketBytes); await add(listBytes);
+  for (const a of atts) if (a.pdf) await add(a.pdf);
+  out.setTitle(`${t.ticket_no} ${t.kind === 'reimb' ? 'Reimbursables' : 'Job Ticket'} with ${t.kind === 'reimb' ? 'receipts and documents' : 'the client-signed copy'}`);
+  out.setAuthor(S.profile?.full_name || ''); out.setCreator('GANKCO Nest');
+  const name = jtFile(t.kind === 'reimb' ? `${t.ticket_no} Reimbursables with receipts.pdf` : `${t.ticket_no} Job Ticket ${t.well_names.join(' & ')} with signed copy.pdf`);
+  saveBlob(new Blob([await out.save()], { type: 'application/pdf' }), name);
+  return name;
+}
+// the page after the ticket: what's attached, what it's for, and where it starts
+async function jtAttachList(t, atts) {
+  const doc = await pdfInit('portrait'); const W = doc.internal.pageSize.getWidth();
+  doc.setFont('Montserrat', 'bold'); doc.setFontSize(13); doc.setTextColor(...rgb(PDF_INK.ink));
+  doc.text(t.kind === 'reimb' ? 'RECEIPTS AND DOCUMENTS ATTACHED' : 'ATTACHED', W / 2, 18, { align: 'center' });
+  doc.setFont('Barlow', 'normal'); doc.setFontSize(8.6); doc.setTextColor(...rgb(PDF_INK.muted));
+  doc.text(jtTxt(`${t.ticket_no} · ${t.job.client?.name || ''}${t.kind === 'reimb' ? '' : ' · ' + t.well_names.join(' & ')}`), W / 2, 23.5, { align: 'center' });
+  const body = atts.map((a, i) => [String(i + 1), jtTxt(a.what), jtTxt(a.name || ''), a.page ? String(a.page) : { content: jtTxt(a.note || ''), styles: { textColor: rgb('B42318') } }]);
+  if (t.kind === 'reimb') (t.lines || []).forEach((l, i) => { if (!(l.receipts || []).length) body.push(['', jtTxt(`Payment ${i + 1}: ${l.description || ''}`), { content: 'No receipt uploaded', styles: { textColor: rgb('B42318'), fontStyle: 'bold' } }, '—']); });
+  if (!body.length) body.push([{ content: 'Nothing was uploaded to this ticket.', colSpan: 4 }]);
+  doc.autoTable({ startY: 29, margin: { left: 10, right: 10, bottom: 20 }, theme: 'grid', styles: jtTableStyle,
+    head: [['#', t.kind === 'reimb' ? 'For' : 'What', 'File', 'Page']], headStyles: { fillColor: rgb(JT_GREY), textColor: rgb(PDF_INK.ink), fontStyle: 'bold' },
+    body, columnStyles: { 0: { cellWidth: 9, halign: 'center' }, 3: { cellWidth: 26, halign: 'center' } } });
+  jtFooter(doc, `${t.ticket_no} · attachments`);
+  return doc;
+}
+// a photo on its own A4 page, under a slim heading saying what it is
+async function jtPhotoPage(dataUrl, label, fileName) {
+  const im = await dataImage(dataUrl);
+  const doc = await pdfInit(im.w > im.h * 1.15 ? 'landscape' : 'portrait'); const W = doc.internal.pageSize.getWidth(), H = doc.internal.pageSize.getHeight();
+  doc.setFillColor(...rgb(JT_GREY)); doc.rect(0, 0, W, 13, 'F');
+  doc.setFont('Barlow', 'bold'); doc.setFontSize(10); doc.setTextColor(...rgb(PDF_INK.ink)); doc.text(jtTxt(label).slice(0, 120), 10, 8.4);
+  doc.setFont('Barlow', 'normal'); doc.setFontSize(7.5); doc.setTextColor(...rgb(PDF_INK.muted)); doc.text(jtTxt(fileName || '').slice(0, 60), W - 10, 8.4, { align: 'right' });
+  const k = Math.min((W - 16) / im.w, (H - 13 - 14) / im.h); const iw = im.w * k, ih = im.h * k;
+  doc.addImage(dataUrl, /image\/png/i.test(dataUrl.slice(0, 30)) ? 'PNG' : 'JPEG', (W - iw) / 2, 13 + 6, iw, ih, undefined, 'FAST');
+  return doc.output('arraybuffer');
 }
 
 // the ticket as an Excel file (unpriced), in the same order as GANKCO's ticket workbooks

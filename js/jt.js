@@ -1,4 +1,4 @@
-/* GANKCO Nest 3.0.11 — JobTrack: field jobs, Daily Operation Reports, HSE Daily Reports, the Operations Breakdown and unpriced tickets.
+/* GANKCO Nest 3.0.12 — JobTrack: field jobs, Daily Operation Reports, HSE Daily Reports, the Operations Breakdown and unpriced tickets.
    No prices anywhere in JobTrack. Roles: Admin (operations managers), Engineer, Viewer (management), and view only for everyone else.
    Everyone with Nest sees every job; the people on a job's crew work on it. */
 'use strict';
@@ -1292,7 +1292,7 @@ const jtTicket = {
   async save(silent) { await q(sb.rpc('jt_ticket_save', { p: this.payload() })); this.dirty = false; if (!silent) toast('Saved'); },
   bind(main) {
     const t = this.t; this.draw(main);
-    $('#tk-pdf', main).onclick = async () => { try { if (this.dirty && t.can_edit) await this.save(true); await jtTicketPdf(await q(sb.rpc('jt_ticket_get', { p_id: t.id }))); } catch (e) { toast(niceError(e), true); } };
+    $('#tk-pdf', main).onclick = async () => { try { if (this.dirty && t.can_edit) await this.save(true); jtTicketPdfAsk(await q(sb.rpc('jt_ticket_get', { p_id: t.id }))); } catch (e) { toast(niceError(e), true); } };
     const xl = $('#tk-xls', main); if (xl) xl.onclick = async () => { try { if (this.dirty && t.can_edit) await this.save(true); await jtTicketXlsx(await q(sb.rpc('jt_ticket_get', { p_id: t.id }))); } catch (e) { toast(niceError(e), true); } };
     $$('[data-fdl]', main).forEach(b => b.onclick = () => jtOpenFile(+b.dataset.fdl));
     const ro = $('#tk-reopen', main); if (ro) ro.onclick = () => modal({ title: 'Reopen ' + t.ticket_no, submit: 'Reopen', body: '<label class="f">Why?<textarea name="note" rows="2" required></textarea></label>',
@@ -1327,6 +1327,17 @@ const jtTicket = {
     $$('[data-fdel]', main).forEach(b => b.onclick = async () => { if (!confirm('Remove this file?')) return; try { await q(sb.rpc('jt_file_delete', { p_id: +b.dataset.fdel })); render({ quiet: true }); } catch (e) { toast(niceError(e), true); } });
   }
 };
+// 3.0.12: the ticket alone, or with its receipts and documents (reimbursables) or the client-signed copy (job ticket), in one PDF
+function jtTicketPdfAsk(t) {
+  const go = async withFiles => { try { const n = await withProgress(withFiles ? 'Putting the PDF together…' : 'Making the PDF…', () => jtTicketPdf(t, withFiles)); jtLogOne(t.job.id, n); } catch (e) { toast(niceError(e), true); } };
+  const reimb = t.kind === 'reimb', n = jtTicketAttachments(t).length;
+  if (!n) return go(false);
+  modal({ title: reimb ? 'PDF of the reimbursables ticket' : 'PDF of the job ticket', submit: null, cancel: 'Close',
+    sub: reimb ? `${plural(n, 'receipt or document', 'receipts and documents')} uploaded. With them, the PDF has the ticket, a list of what’s attached and the page each starts on, then the receipts in payment order. PDFs go in as uploaded; photos get a heading saying which payment they’re for.`
+      : 'The client-signed copy goes straight after the ticket.',
+    body: `<div class="actionrow"><button type="button" class="btn" id="tk-p1">${ico('pdf')}Ticket only</button><button type="button" class="btn primary" id="tk-p2">${ico('pdf')}${reimb ? 'Ticket with receipts and documents' : 'Ticket with the client-signed copy'}</button></div>`,
+    onOpen: d => { $('#tk-p1', d).onclick = () => { d.close(); d.remove(); go(false); }; $('#tk-p2', d).onclick = () => { d.close(); d.remove(); go(true); }; } });
+}
 async function jtOpenFile(id) {
   try { const f = (await q(sb.from('jt_files').select('name,mime,data').eq('id', id)))[0]; if (!f) return;
     const bin = atob(f.data); const a = new Uint8Array(bin.length); for (let i = 0; i < bin.length; i++) a[i] = bin.charCodeAt(i);
