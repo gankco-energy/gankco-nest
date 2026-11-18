@@ -60,10 +60,12 @@ const ROLE_LABEL = { pending: 'Waiting for approval', staff: 'Staff', superadmin
 // 3.0.4: a role per app. The Developer (key 'superadmin') is admin everywhere; being an admin in one app gives nothing in another.
 const APP_ROLES = { inventory: [['admin', 'Admin'], ['staff', 'Staff'], ['viewer', 'Viewer']], jobtrack: [['admin', 'Admin'], ['engineer', 'Engineer'], ['viewer', 'Viewer']], po: [['staff', 'Staff'], ['viewer', 'Viewer']], proforma: [['admin', 'Admin'], ['staff', 'Staff']] };
 const APP_ROLE_HINT = { inventory: { admin: 'Manages items and stock. Approves for the lines where they are main or backup admin.', staff: 'Requests, counts and returns for their service lines.', viewer: 'Sees the Overview and stock, and adds jobs to the Job planner.' },
-  jobtrack: { admin: 'Operations manager: sets up jobs, crew and ticket items, reviews reports and approves tickets.', engineer: 'Daily reports and tickets on the jobs they are crew on.', viewer: 'Sees every job, report and ticket. Changes nothing.' },
+  jobtrack: { admin: 'Operations manager: sets up jobs, crew and ticket items, reviews reports and approves tickets.', engineer: 'Daily reports and tickets on the jobs they are crew on. Can start a job.', viewer: 'Management: sees every job and downloads whole jobs. Works only on jobs they are crew on.' },
   po: { staff: 'Raises, revises, cancels and closes their own POs.', viewer: 'Sees the Overview and POs, and downloads them.' }, proforma: { admin: 'Manages PFIs and quotes.', staff: 'Makes PFIs and quotes.' } };
+// 3.0.11: everyone with Nest can view JobTrack, unless the Developer sets them to No access
 const appRoleOf = (p, app) => !p ? null : p.role === 'superadmin' ? (app === 'po' ? 'staff' : 'admin') : p.role !== 'staff' ? null
-  : (p.apps || []).includes(app) ? ((p.app_roles || {})[app] || (app === 'jobtrack' ? 'engineer' : 'staff')) : null;
+  : app === 'jobtrack' ? ((p.app_roles || {}).jobtrack === 'none' ? null : (p.apps || []).includes('jobtrack') ? ((p.app_roles || {}).jobtrack || 'engineer') : 'viewer')
+  : (p.apps || []).includes(app) ? ((p.app_roles || {})[app] || 'staff') : null;
 
 // roles & service lines
 const realRole = () => S.profile?.role;
@@ -99,7 +101,7 @@ const personName = (id, fallback = '') => { const p = S.people[id]; return p ? (
 const setting = (k, d) => S.settings[k] ?? d;
 // 2.8: which apps a person can open (the Developer always has all of them)
 // 3.0.3: while viewing as a role, apps follow that role (Inventory and PO; PeopleCore only for the Developer until go-live)
-const appAllowed = app => viewAsOn() ? (S.viewAs.role === 'superadmin' || !!S.viewAs[app]) : (realSuper() || (realRole() === 'staff' && (S.profile?.apps || []).includes(app)));
+const appAllowed = app => viewAsOn() ? (S.viewAs.role === 'superadmin' || !!S.viewAs[app]) : (realSuper() || (realRole() === 'staff' && (app === 'jobtrack' ? !!appRoleOf(S.profile, 'jobtrack') : (S.profile?.apps || []).includes(app))));
 // 3.0.4: PeopleCore is under construction until the Developer opens it (the Developer and the testers they tick can go in)
 // 3.0.9: PeopleCore and JobTrack can be in testing; only the Developer and that app's testers go in (Nest settings → Apps in testing)
 const appTestOn = app => { const t = setting('app_testing', null); return t ? !!t[app]?.on : app === 'people' && !!setting('people_construction', null)?.on; };
@@ -421,8 +423,39 @@ async function checkVersion() {
 }
 
 // ---------------------------------------------------------------- auth
+// 3.0.11: no signal. Nest opens from what this phone last saved (the person, the lookups, and JobTrack's own copies).
+const netErr = e => !navigator.onLine || /can.t reach the server|failed to fetch|networkerror|load failed|network request failed/i.test(String(e?.message || e));
+const bootKey = uid => 'nest.boot.' + uid;
+function bootSave() {
+  try { localStorage.setItem(bootKey(S.profile.id), JSON.stringify({ at: Date.now(), profile: S.profile, depts: S.depts, cats: S.cats, locs: S.locs, members: S.members, svc: S.svc, subtypes: S.subtypes,
+    people: Object.values(S.people || {}), settings: S.settings })); } catch (e) { }
+}
+function bootSnap(uid) { try { return JSON.parse(localStorage.getItem(bootKey(uid)) || 'null'); } catch (e) { return null; } }
+// the person signed in on this phone (their sign-in is kept even when it can't be refreshed with no signal)
+function storedUser() { try { const k = Object.keys(localStorage).find(x => /^sb-.*-auth-token$/.test(x)); const t = k && JSON.parse(localStorage.getItem(k)); return t?.user?.id ? t.user : null; } catch (e) { return null; } }
+function bootOffline(uid) {
+  const b = bootSnap(uid); if (!b) return false;
+  S.offline = true; S.profile = b.profile; S.depts = b.depts || []; S.cats = b.cats || []; S.locs = b.locs || []; S.members = b.members || []; S.svc = b.svc || []; S.subtypes = b.subtypes || [];
+  S.people = Object.fromEntries((b.people || []).map(p => [p.id, p])); S.settings = b.settings || {}; S.maint = S.maint || {};
+  S.shellReady = false; S.gate = null; render(); offBar(); return true;
+}
+function offBar() {
+  let el = $('#offbar'); const off = !navigator.onLine || S.offline;
+  if (!off) { if (el) el.remove(); return; }
+  if (!el) { el = document.createElement('div'); el.id = 'offbar'; document.body.prepend(el); }
+  const back = navigator.onLine && S.offline;
+  el.className = 'offbar' + (back ? ' back' : '');
+  el.innerHTML = back ? `${ico('check')}<span>You’re back online.</span><button class="btn small" id="offreload">Reconnect</button>`
+    : `${ico('clock')}<span>No signal. You’re seeing what was saved on this phone. Reports you save are sent when you’re back online.</span>`;
+  const r = $('#offreload', el); if (r) r.onclick = () => location.reload();
+}
+window.addEventListener('online', offBar); window.addEventListener('offline', offBar);
+if ('serviceWorker' in navigator && window.isSecureContext) window.addEventListener('load', () => navigator.serviceWorker.register('sw.js', { scope: './' }).catch(() => { }));
+
 sb.auth.onAuthStateChange((event, session) => {
   if (event === 'PASSWORD_RECOVERY') S.recovery = true;
+  // no signal, and the sign-in couldn't be refreshed: open from what this phone saved
+  if (event === 'INITIAL_SESSION' && !session && !navigator.onLine) { const u = storedUser(); if (u && bootSnap(u.id)) { S.session = { user: u, offline: true }; whenReady(() => bootOffline(u.id)); return; } }
   const changed = (session?.user?.id || null) !== (S.session?.user?.id || null);
   S.session = session;
   if (event === 'SIGNED_OUT') { S.profile = null; S.gate = null; invalidate(); S.shellReady = false; if (S.channel) { sb.removeChannel(S.channel); S.channel = null; } }
@@ -433,15 +466,18 @@ function whenReady(fn) { if (document.readyState === 'loading') document.addEven
 async function boot() {
   if (S.recovery) return renderReset();
   if (!S.session) return renderAuth(/^#\/signup/.test(location.hash) ? 'signup' : 'signin');
+  // no signal at all: don't wait for the server, open from this phone straight away
+  if (!navigator.onLine && bootOffline(S.session.user.id)) return;
   try {
     S.profile = await q(sb.from('profiles').select('*').eq('id', S.session.user.id).maybeSingle());
-  } catch (e) { return renderAuth('signin', niceError(e)); }
+  } catch (e) { if (netErr(e) && bootOffline(S.session.user.id)) return; return renderAuth('signin', niceError(e)); }
   // 3.0.4: photo and signature, straight after the first sign-in (can be skipped and done later)
   if (typeof needsSetup === 'function' && needsSetup() && !setupSkipped()) return renderSetup();
   if (!isActive()) return renderPending();
   if (S.viewAs && !realSuper()) setViewAs(null);
-  try { await loadLookups(); } catch (e) { return renderAuth('signin', niceError(e)); }
-  if (typeof loadMaint === 'function') { await loadMaint(); S.maint.sig = maintSig(); }
+  try { await loadLookups(); } catch (e) { if (netErr(e) && bootOffline(S.session.user.id)) return; return renderAuth('signin', niceError(e)); }
+  S.offline = false; bootSave(); offBar();
+  if (typeof loadMaint === 'function') { try { await loadMaint(); S.maint.sig = maintSig(); } catch (e) { } }
   if (!isSuper() && !S.depts.some(d => +S.line === d.id)) setLine('');
   if (!S.line && !isSuper() && !isAdmin()) { const m = myLineIds(); if (m.length === 1) setLine(m[0]); }
   refreshAlerts(); subscribe(); checkVersion();

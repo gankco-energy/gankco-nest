@@ -1,5 +1,6 @@
-/* GANKCO Nest 3.0.9 — JobTrack: field jobs, Daily Operation Reports, the Operations Breakdown and unpriced tickets.
-   No prices anywhere in JobTrack. Roles: Admin (operations managers), Engineer (crew), Viewer (management). */
+/* GANKCO Nest 3.0.11 — JobTrack: field jobs, Daily Operation Reports, HSE Daily Reports, the Operations Breakdown and unpriced tickets.
+   No prices anywhere in JobTrack. Roles: Admin (operations managers), Engineer, Viewer (management), and view only for everyone else.
+   Everyone with Nest sees every job; the people on a job's crew work on it. */
 'use strict';
 
 const JT_STATUS = { planned: ['muted', 'Planned'], mobilised: ['out', 'Mobilised'], on_location: ['ok', 'On location'], demobilised: ['pending', 'Demobilised'], closed: ['muted', 'Closed'] };
@@ -10,11 +11,13 @@ const JT_SEC = { sales: 'Sales items', rental: 'Rental items', consumable: 'Cons
 const JT_RULE = { days: 'Days follow an equipment group', location: 'Days on location', once: 'Once per ticket', qty: 'Quantity typed in', mob: 'Mobilisation: 1 when the group mobilised', demob: 'Demobilisation: 1 when the group demobilised' };
 const JT_RULE_SHORT = { days: 'Days', location: 'Days on location', once: 'Once', qty: 'Quantity', mob: 'Mobilisation', demob: 'Demobilisation' };
 const JT_MODE = { normal: 'Operating and standby as reported', standby: 'Every day as standby (backup tool)', operating: 'Every day as operating' };
-S.jt = { cfg: null, clients: [], items: [], at: 0, f: { view: 'active', q: '' }, ifq: { q: '', sec: '' } };
+S.jt = { cfg: null, clients: [], items: [], at: 0, f: { view: 'active', q: '', who: null }, ifq: { q: '', sec: '' } };
 
 const jtRole = () => appRole('jobtrack');
 const jtAdmin = () => jtRole() === 'admin' && !S.viewAs;
 const jtWriter = () => ['admin', 'engineer'].includes(jtRole()) && !S.viewAs;
+// 3.0.11: the HSE person on a job (or a lead whose HSE person isn't on Nest) fills its HSE Daily Reports
+const jtHseWriter = () => !S.viewAs && (jtAdmin() || (S.jt.cfg?.my_hse || 0) > 0);
 // 3.0.9: engineers can start a job (JobTrack settings → Jobs), and they lead it
 const jtCanStart = () => !S.viewAs && !!S.jt.cfg?.can_start;
 const jtGroups = () => S.jt.cfg?.groups || ['Slickline', 'TTSC', 'Crane'];
@@ -29,24 +32,36 @@ const jtNaira = v => '₦' + (+v || 0).toLocaleString('en-US', { minimumFraction
 
 async function jtLoad(force) {
   if (!force && S.jt.at && Date.now() - S.jt.at < 60000) return S.jt;
-  const [cfg, clients, items] = await Promise.all([q(sb.rpc('jt_cfg')), q(sb.from('jt_clients').select('*').order('name')), q(sb.from('jt_items').select('*').order('sort').order('id'))]);
+  const [cfg, clients, items] = await jtCached('base', () => Promise.all([q(sb.rpc('jt_cfg')), q(sb.from('jt_clients').select('*').order('name')), q(sb.from('jt_items').select('*').order('sort').order('id'))]));
   Object.assign(S.jt, { cfg, clients, items, at: Date.now() });
-  jtFlush();
+  jtFlush(); jtMenuRefresh();
   return S.jt;
+}
+// the menu was drawn before JobTrack knew whether you fill HSE reports: draw it again once it does
+function jtMenuRefresh() {
+  if (S.shellApp !== 'jobtrack' || !S.shellReady) return;
+  const sig = `${jtWriter()}|${jtHseWriter()}|${jtAdmin()}`; if (S.jt.menuSig === sig) return; S.jt.menuSig = sig;
+  const { main, setup } = jtNav(); const link = ([r, l, i]) => `<a href="#/${r}" data-r="${r}">${ico(i)}${l}</a>`;
+  const nav = $('.side .nav'); if (nav) nav.innerHTML = main.map(link).join('') + (setup.length ? `<div class="nav-group">Setup</div>${setup.map(link).join('')}` : '');
+  const bb = $('.bottombar'); if (bb && !appTesting('jobtrack')) bb.outerHTML = jtBottomBar();
+  const { parts } = parseHash(); setNav(jtNavKey(parts));
 }
 
 // ---------------------------------------------------------------- menu, phone bar, home tile
 function jtNav() {
-  const main = [['jt', 'Overview', 'home'], ['jt/jobs', 'Jobs', 'derrick'], ...(jtWriter() ? [['jt/report/new', 'New daily report', 'plus']] : []), ['jt/items', 'Ticket items', 'label']];
+  const main = [['jt', 'Overview', 'home'], ['jt/jobs', 'Jobs', 'derrick'], ...(jtWriter() ? [['jt/report/new', 'New daily report', 'plus']] : []),
+    ...(jtHseWriter() ? [['jt/hse/new', 'New HSE report', 'cert']] : []), ['jt/items', 'Ticket items', 'label']];
   const setup = [...(jtAdmin() || isSuper() ? [['jt/clients', 'Clients', 'building'], ['jt/settings', 'JobTrack settings', 'gear']] : []), ...(isSuper() ? [['team', 'Nest admin', 'users']] : [])];
   return { main, setup };
 }
-const jtNavKey = parts => !parts[1] ? 'jt' : ['job', 'ticket'].includes(parts[1]) ? 'jt/jobs' : parts[1] === 'report' ? (parts[2] === 'new' ? 'jt/report/new' : 'jt/jobs') : 'jt/' + parts[1];
+const jtNavKey = parts => !parts[1] ? 'jt' : ['job', 'ticket'].includes(parts[1]) ? 'jt/jobs' : parts[1] === 'report' ? (parts[2] === 'new' ? 'jt/report/new' : 'jt/jobs')
+  : parts[1] === 'hse' ? (parts[2] === 'new' ? 'jt/hse/new' : 'jt/jobs') : 'jt/' + parts[1];
 function jtBottomBar() {
   return `<nav class="bottombar">
     <a href="#/jt" data-r="jt">${ico('home')}Overview</a>
     <a href="#/jt/jobs" data-r="jt/jobs">${ico('derrick')}Jobs</a>
-    ${jtWriter() ? `<a href="#/jt/report/new" data-r="jt/report/new" class="scan"><span class="disc">${ico('plus')}</span>Report</a>` : ''}
+    ${jtWriter() ? `<a href="#/jt/report/new" data-r="jt/report/new" class="scan"><span class="disc">${ico('plus')}</span>Report</a>`
+      : jtHseWriter() ? `<a href="#/jt/hse/new" data-r="jt/hse/new" class="scan"><span class="disc">${ico('plus')}</span>HSE report</a>` : ''}
     <a href="#/jt/items" data-r="jt/items">${ico('label')}Items</a>
     <a href="#/" data-r="home">${ico('grid')}Apps</a></nav>`;
 }
@@ -55,7 +70,7 @@ async function jtTileMeta(el) {
     const o = await q(sb.rpc('jt_overview'));
     const active = o.jobs.filter(j => ['mobilised', 'on_location'].includes(j.status));
     const bits = [o.to_approve.length ? plural(o.to_approve.length, 'ticket') + ' to approve' : '', o.returned.length ? `${o.returned.length} sent back to you` : '',
-      (o.hse_todo || []).length ? plural(o.hse_todo.length, 'HSE section') + ' to fill' : '',
+      (o.hse_todo || []).length ? plural(o.hse_todo.length, 'HSE report') + ' to fill' : '',
       active.length ? plural(active.length, 'job') + ' on location' : ''].filter(Boolean);
     el.textContent = bits.join(' · ') || 'Open';
     if (o.to_approve.length || o.returned.length || (o.hse_todo || []).length) el.classList.add('hot');
@@ -65,10 +80,10 @@ async function jtTileMeta(el) {
 // ---------------------------------------------------------------- router
 ROUTES.jt = {
   async load(parts, params) {
-    if (!jtRole()) return topbar('JobTrack') + `<div class="notice">You don’t have access to JobTrack yet. Ask the Developer to switch it on for you on the Team page.</div><a class="btn" href="#/">Back to Nest home</a>`;
+    if (!jtRole()) return topbar('JobTrack') + `<div class="notice">You don’t have access to JobTrack. Ask the Developer if you need it.</div><a class="btn" href="#/">Back to Nest home</a>`;
     await jtLoad();
     const p1 = parts[1];
-    this.page = !p1 ? jtOverview : p1 === 'jobs' ? jtJobs : p1 === 'job' ? jtJob : p1 === 'report' ? jtReport : p1 === 'ticket' ? jtTicket
+    this.page = !p1 ? jtOverview : p1 === 'jobs' ? jtJobs : p1 === 'job' ? jtJob : p1 === 'report' ? jtReport : p1 === 'hse' ? jtHse : p1 === 'ticket' ? jtTicket
       : p1 === 'items' ? jtItemsPage : p1 === 'clients' ? jtClientsPage : p1 === 'settings' ? jtSettingsPage : jtOverview;
     return this.page.load(parts, params);
   },
@@ -78,28 +93,36 @@ ROUTES.jt = {
 // ================================================================ OVERVIEW
 const jtOverview = {
   async load() {
-    const o = this.o = await q(sb.rpc('jt_overview'));
-    const active = o.jobs.filter(j => ['mobilised', 'on_location'].includes(j.status));
+    const o = this.o = await jtCached('overview', () => q(sb.rpc('jt_overview')));
+    // engineers land on their own jobs; operations managers (and people on no job) see them all
+    const mine = o.jobs.filter(j => j.mine); const own = !jtAdmin() && mine.length > 0;
+    const list = own ? mine : o.jobs;
+    const active = list.filter(j => ['mobilised', 'on_location'].includes(j.status));
     const missing = active.filter(j => !j.today_reports);
-    return topbar('JobTrack', 'Field jobs, daily operation reports and job tickets. No prices here: pricing happens in PFI & Quote.',
-        `${jtCanStart() ? `<button class="btn" id="jt-newjob">${ico('plus')}New job</button>` : ''}${jtWriter() ? `<a class="btn tagbtn" href="#/jt/report/new">${ico('plus')}New daily report</a>` : ''}`) +
+    const todo = o.hse_todo || [];
+    if (!S.offline) jtPrefetch(mine.filter(j => j.status !== 'closed').map(j => j.id));
+    return topbar('JobTrack', 'Field jobs, daily operation reports, HSE reports and job tickets. No prices here: pricing happens in PFI & Quote.',
+        `${jtCanStart() ? `<button class="btn" id="jt-newjob">${ico('plus')}New job</button>` : ''}${jtHseWriter() && !jtWriter() ? `<a class="btn tagbtn" href="#/jt/hse/new">${ico('plus')}New HSE report</a>` : ''}${jtWriter() ? `<a class="btn tagbtn" href="#/jt/report/new">${ico('plus')}New daily report</a>` : ''}`) +
       `<div class="board b4">
-        <a class="kpi" href="#/jt/jobs"><div class="n">${active.length}</div><div class="l">Jobs on location</div></a>
+        <a class="kpi" href="#/jt/jobs"><div class="n">${active.length}</div><div class="l">${own ? 'Your jobs on location' : 'Jobs on location'}</div></a>
         <div class="kpi ${missing.length ? 'warn' : ''}"><div class="n">${missing.length}</div><div class="l">No daily report yet today</div></div>
         <div class="kpi ${o.to_approve.length ? 'warn' : ''}"><div class="n">${o.to_approve.length}</div><div class="l">Tickets to approve${S.jt.cfg?.can_approve ? '' : '<span class="sub"> (approvers only)</span>'}</div></div>
-        <div class="kpi ${o.returned.length ? 'bad' : ''}"><div class="n">${o.returned.length}</div><div class="l">Sent back to you</div></div></div>
-      ${o.returned.length || o.to_approve.length || (o.hse_todo || []).length || (jtAdmin() && o.to_review) ? `<section class="panel"><header><h2>Needs you</h2></header><ul class="list">
-        ${(o.hse_todo || []).map(x => `<li><a class="main" href="#/jt/report/${x.id}"><div class="name">HSE section to fill: ${esc(x.label)} ${chip('pending', 'HSE')}</div><div class="sub">${esc(x.job_no)} · the report can’t be sent until you fill it</div></a></li>`).join('')}
+        <div class="kpi ${o.returned.length || todo.length ? 'bad' : ''}"><div class="n">${o.returned.length + todo.filter(x => x.status === 'returned').length}</div><div class="l">Sent back to you</div></div></div>
+      ${o.returned.length || o.to_approve.length || todo.length || (jtAdmin() && (o.to_review || o.hse_review)) ? `<section class="panel"><header><h2>Needs you</h2></header><ul class="list">
+        ${todo.map(x => x.type === 'new' ? `<li><a class="main" href="#/jt/hse/new?job=${x.job_id}&well=${x.well_id}&date=${x.date}"><div class="name">HSE report to fill: ${esc(x.label)} ${chip('pending', 'HSE')}</div><div class="sub">${esc(x.job_no)} · the daily report can’t be sent until it’s in</div></a></li>`
+          : `<li><a class="main" href="#/jt/hse/${x.id}"><div class="name">HSE report ${esc(x.label)} ${x.status === 'returned' ? chip('overdue', 'Sent back') : chip('muted', 'Not sent yet')}</div><div class="sub">${esc(x.job_no)}${x.note ? ' · ' + esc(x.note) : ' · send it when the day’s figures are in'}</div></a></li>`).join('')}
         ${o.returned.map(x => `<li><a class="main" href="#/jt/${x.type}/${x.id}"><div class="name">${x.type === 'report' ? 'Daily report' : 'Ticket'} ${esc(x.label)} ${chip('overdue', 'Sent back')}</div><div class="sub">${esc(x.note || '')}</div></a></li>`).join('')}
         ${o.to_approve.map(x => `<li><a class="main" href="#/jt/ticket/${x.id}"><div class="name">${esc(x.ticket_no)} ${chip('pending', 'To approve')}</div><div class="sub">${esc(x.title || '')} · sent by ${esc(x.by || '')} ${fdt(x.at)}</div></a></li>`).join('')}
         ${jtAdmin() && o.to_review ? `<li><a class="main" href="#/jt/jobs"><div class="name">${plural(o.to_review, 'daily report')} to review</div><div class="sub">Open a job and look for reports marked Sent.</div></a></li>` : ''}
+        ${jtAdmin() && o.hse_review ? `<li><a class="main" href="#/jt/jobs"><div class="name">${plural(o.hse_review, 'HSE report')} to review</div><div class="sub">Open a job’s HSE reports tab and look for reports marked Sent.</div></a></li>` : ''}
         </ul></section>` : ''}
-      <section class="panel"><header><h2>Jobs</h2><span class="meta">${plural(o.jobs.length, 'job')}</span><span class="right"><a class="btn small" href="#/jt/jobs">All jobs</a></span></header>
-        ${o.jobs.length ? `<ul class="list">${o.jobs.map(j => `<li><a class="main" href="#/jt/job/${j.id}"><div class="name">${esc(j.job_no)} ${jtChip(JT_STATUS, j.status)}</div>
+      <section class="panel"><header><h2>${own ? 'Your jobs' : 'Jobs'}</h2><span class="meta">${plural(list.length, 'job')}</span><span class="right"><a class="btn small" href="#/jt/jobs">All jobs</a></span></header>
+        ${list.length ? `<ul class="list">${list.map(j => `<li><a class="main" href="#/jt/job/${j.id}"><div class="name">${esc(j.job_no)} ${jtChip(JT_STATUS, j.status)}${j.mine && !own ? ' ' + chip('out', 'Yours') : ''}</div>
           <div class="sub">${esc(j.client || '')}${j.project ? ' · ' + esc(j.project) : ''}${j.field ? ' · ' + esc(j.field) : ''}${j.lead ? ' · lead ' + esc(j.lead) : ''}</div>
-          <div class="sub">${j.last_report ? 'Last report ' + fd(j.last_report) : 'No reports yet'}${['mobilised', 'on_location'].includes(j.status) ? (j.today_reports ? ' · ' + chip('ok', 'Today’s report in') : ' · ' + chip('pending', 'No report yet today')) : ''}${j.drafts ? ` · ${plural(j.drafts, 'draft')}` : ''}</div></a>
-          ${jtWriter() && ['mobilised', 'on_location'].includes(j.status) ? `<div class="end"><a class="btn small" href="#/jt/report/new?job=${j.id}">${ico('plus')}Today’s report</a></div>` : ''}</li>`).join('')}</ul>`
-          : `<div class="empty">No jobs yet.${jtCanStart() ? ' Press <b>New job</b> to set one up.' : ' An operations manager sets jobs up and adds you to the crew.'}</div>`}</section>`;
+          <div class="sub">${j.last_report ? 'Last report ' + fd(j.last_report) : 'No reports yet'}${['mobilised', 'on_location'].includes(j.status) ? (j.today_reports ? ' · ' + chip('ok', 'Today’s report in') : ' · ' + chip('pending', 'No report yet today')) + (j.today_hse ? ' · ' + chip('ok', 'HSE in') : '') : ''}${j.drafts ? ` · ${plural(j.drafts, 'draft')}` : ''}</div></a>
+          ${(j.mine || jtAdmin()) && jtWriter() && ['mobilised', 'on_location'].includes(j.status) ? `<div class="end"><a class="btn small" href="#/jt/report/new?job=${j.id}">${ico('plus')}Today’s report</a></div>` : ''}</li>`).join('')}</ul>`
+          : `<div class="empty">No jobs yet.${jtCanStart() ? ' Press <b>New job</b> to set one up.' : ' An operations manager sets jobs up and adds you to the crew.'}</div>`}
+        ${own && o.jobs.length > mine.length ? `<div class="body muted small">You’re on ${plural(mine.length, 'job')}. Everyone can look at the other ${plural(o.jobs.length - mine.length, 'job')} under <a href="#/jt/jobs">All jobs</a>.</div>` : ''}</section>`;
   },
   bind(main) { const b = $('#jt-newjob', main); if (b) b.onclick = () => jtJobForm(); }
 };
@@ -107,25 +130,30 @@ const jtOverview = {
 // ================================================================ JOBS
 const jtJobs = {
   async load() {
-    const [jobs, reps] = await Promise.all([q(sb.from('jt_jobs').select('*').order('seq', { ascending: false })), q(sb.from('jt_reports').select('job_id,report_date'))]);
+    const [jobs, reps, crew] = await jtCached('jobs', () => Promise.all([q(sb.from('jt_jobs').select('*').order('seq', { ascending: false })), q(sb.from('jt_reports').select('job_id,report_date')),
+      q(sb.from('jt_crew').select('job_id').eq('profile_id', S.profile.id))]));
     const last = {}; reps.forEach(r => { if (!last[r.job_id] || r.report_date > last[r.job_id]) last[r.job_id] = r.report_date; });
     const people = Object.fromEntries((S.jt.cfg?.people || []).map(p => [p.id, p.name]));
-    this.rows = jobs.map(j => ({ ...j, last: last[j.id] || null, client: jtClientName(j.client_id), lead: people[j.lead_id] || '' }));
+    const mine = new Set(crew.map(c => c.job_id));
+    this.rows = jobs.map(j => ({ ...j, last: last[j.id] || null, client: jtClientName(j.client_id), lead: people[j.lead_id] || '', mine: mine.has(j.id) || j.lead_id === S.profile.id }));
     const f = S.jt.f;
-    return topbar('Jobs', 'Every job: its wells, crew, daily reports and tickets.', jtCanStart() ? `<button class="btn tagbtn" id="jt-newjob">${ico('plus')}New job</button>` : '') +
-      `<section class="panel"><div class="filters body">
+    // engineers start on their own jobs; everyone can switch to all of them
+    if (!f.who) f.who = !jtAdmin() && this.rows.some(j => j.mine) ? 'mine' : 'all';
+    return topbar('Jobs', 'Every job: its wells, crew, daily reports, HSE reports and tickets. Everyone can look; the crew works on each job.', jtCanStart() ? `<button class="btn tagbtn" id="jt-newjob">${ico('plus')}New job</button>` : '') +
+      `<nav class="tabs" id="jt-who"><a href="#" data-who="mine" class="${f.who === 'mine' ? 'on' : ''}">My jobs <span class="count">${this.rows.filter(j => j.mine).length}</span></a><a href="#" data-who="all" class="${f.who === 'all' ? 'on' : ''}">All jobs <span class="count">${this.rows.length}</span></a></nav>
+      <section class="panel"><div class="filters body">
         <input type="search" id="jt-q" placeholder="Search job number, client, field or project" value="${esc(f.q)}" autocomplete="off">
         <div class="seg" id="jt-seg">${[['active', 'Active'], ['planned', 'Planned'], ['on', 'Mobilised & on location'], ['closed', 'Demobilised & closed'], ['all', 'All']].map(([k, l]) => `<button type="button" data-v="${k}" class="${f.view === k ? 'on' : ''}">${l}</button>`).join('')}</div></div>
         <div id="jt-list"></div></section>`;
   },
   draw(main) {
     const f = S.jt.f, t = f.q.trim().toLowerCase();
-    const rows = this.rows.filter(j => (f.view === 'all' || (f.view === 'active' && j.status !== 'closed') || (f.view === 'planned' && j.status === 'planned') || (f.view === 'on' && ['mobilised', 'on_location'].includes(j.status))
+    const rows = this.rows.filter(j => (f.who !== 'mine' || j.mine) && (f.view === 'all' || (f.view === 'active' && j.status !== 'closed') || (f.view === 'planned' && j.status === 'planned') || (f.view === 'on' && ['mobilised', 'on_location'].includes(j.status))
       || (f.view === 'closed' && ['demobilised', 'closed'].includes(j.status))) && (!t || [j.job_no, j.client, j.field, j.project, j.lead].join(' ').toLowerCase().includes(t)));
     $('#jt-list', main).innerHTML = rows.length ? `<div class="tablewrap"><table class="t stack"><thead><tr><th>Job</th><th>Client</th><th>Project · field</th><th>Lead</th><th>Status</th><th>Last report</th></tr></thead><tbody>
-      ${rows.map(j => `<tr class="click" data-go="#/jt/job/${j.id}"><td class="name">${esc(j.job_no)}</td><td>${esc(j.client)}</td><td>${esc([j.project, j.field].filter(Boolean).join(' · ') || '—')}</td>
+      ${rows.map(j => `<tr class="click" data-go="#/jt/job/${j.id}"><td class="name">${esc(j.job_no)}${j.mine && f.who === 'all' ? ' ' + chip('out', 'Yours') : ''}</td><td>${esc(j.client)}</td><td>${esc([j.project, j.field].filter(Boolean).join(' · ') || '—')}</td>
         <td>${esc(j.lead || '—')}</td><td>${jtChip(JT_STATUS, j.status)}</td><td>${j.last ? fd(j.last) : '<span class="sub">None yet</span>'}</td></tr>`).join('')}</tbody></table></div>`
-      : `<div class="empty">No jobs match.</div>`;
+      : `<div class="empty">${f.who === 'mine' && !this.rows.some(j => j.mine) ? 'You’re not on any job’s crew yet. Look under <b>All jobs</b>.' : 'No jobs match.'}</div>`;
     $$('[data-go]', main).forEach(r => r.onclick = () => go(r.dataset.go));
   },
   bind(main) {
@@ -133,6 +161,7 @@ const jtJobs = {
     const b = $('#jt-newjob', main); if (b) b.onclick = () => jtJobForm();
     $('#jt-q', main).oninput = debounce(e => { S.jt.f.q = e.target.value; this.draw(main); }, 200);
     $$('#jt-seg button', main).forEach(b => b.onclick = () => { S.jt.f.view = b.dataset.v; $$('#jt-seg button', main).forEach(x => x.classList.toggle('on', x === b)); this.draw(main); });
+    $$('#jt-who a', main).forEach(a => a.onclick = e => { e.preventDefault(); S.jt.f.who = a.dataset.who; $$('#jt-who a', main).forEach(x => x.classList.toggle('on', x === a)); this.draw(main); });
   }
 };
 
@@ -196,18 +225,20 @@ async function jtJobForm(j) {
 const jtJob = {
   async load(parts, params) {
     const id = +parts[2]; if (!(id > 0)) { setTimeout(() => go('#/jt/jobs'), 0); return '<div class="loading">Opening…</div>'; }
-    const j = this.j = await q(sb.rpc('jt_job_get', { p_id: id }));
+    const j = this.j = await jtCached('job.' + id, () => q(sb.rpc('jt_job_get', { p_id: id })));
     this.tab = params?.get('t') || 'reports';
     const lead = j.lead_id === S.profile.id;
     const statusBtns = (jtAdmin() || (lead && jtWriter())) && j.status !== 'closed' ? `<select id="jt-status" class="inline" title="Job status">${Object.entries(JT_STATUS).filter(([k]) => k !== 'closed' || jtAdmin()).map(([k, v]) => opt(k, v[1], j.status)).join('')}</select>` : '';
-    const tabs = [['reports', `Daily reports <span class="count">${j.reports.length}</span>`], ['tickets', `Tickets <span class="count">${j.tickets.length}</span>`], ['breakdown', 'Operations breakdown'], ['setup', 'Wells, crew & items']];
+    const tabs = [['reports', `Daily reports <span class="count">${j.reports.length}</span>`], ['hse', `HSE reports <span class="count">${(j.hse || []).length}</span>`], ['tickets', `Tickets <span class="count">${j.tickets.length}</span>`], ['breakdown', 'Operations breakdown'], ['setup', 'Wells, crew & items']];
     let body = '';
     if (this.tab === 'reports') body = this.reports(j);
+    else if (this.tab === 'hse') body = this.hse(j);
     else if (this.tab === 'tickets') body = this.tickets(j);
-    else if (this.tab === 'breakdown') { this.bd = await q(sb.rpc('jt_breakdown', { p_job: id })); body = this.breakdown(j, this.bd); }
+    else if (this.tab === 'breakdown') { this.bd = await jtCached('bd.' + id, () => q(sb.rpc('jt_breakdown', { p_job: id }))); body = this.breakdown(j, this.bd); }
     else body = this.setup(j);
     return topbar(esc(j.job_no), `${esc(j.client?.short_name || j.client?.name || '')}${j.project ? ' · ' + esc(j.project) : ''}${j.field ? ' · ' + esc(j.field) : ''}`,
-        `${statusBtns}${j.can_manage && !S.viewAs && (jtAdmin() || j.status !== 'closed') ? `<button class="btn" id="jt-edit">${ico('edit')}Edit</button>` : ''}${j.can_write && j.status !== 'closed' ? `<a class="btn tagbtn" href="#/jt/report/new?job=${j.id}">${ico('plus')}New daily report</a>` : ''}`) +
+        `${statusBtns}${j.can_manage && !S.viewAs && (jtAdmin() || j.status !== 'closed') ? `<button class="btn" id="jt-edit">${ico('edit')}Edit</button>` : ''}${j.is_hse && !S.viewAs && j.status !== 'closed' && this.tab !== 'hse' ? `<a class="btn tagbtn" href="#/jt/hse/new?job=${j.id}">${ico('plus')}New HSE report</a>` : ''}${j.can_write && !S.viewAs && j.status !== 'closed' && !(j.is_hse && j.lead_id !== S.profile.id && !jtAdmin()) ? `<a class="btn tagbtn" href="#/jt/report/new?job=${j.id}">${ico('plus')}New daily report</a>` : ''}`) +
+      `${j.is_crew || jtAdmin() ? '' : `<div class="notice">You can look at everything on this job. Only its crew and the operations managers work on it.</div>`}` +
       `<section class="panel"><div class="body jt-facts">
         <div><span>Status</span>${jtChip(JT_STATUS, j.status)}</div><div><span>Client</span><b>${esc(j.client?.name || '—')}</b></div>
         <div><span>Client PO</span><b>${esc(j.client_po || '—')}</b></div><div><span>Lead engineer</span><b>${esc(j.lead_name || '—')}</b></div>
@@ -220,11 +251,28 @@ const jtJob = {
     if (!j.reports.length) return `<section class="panel"><div class="empty">No daily reports yet.${j.can_write ? ' Press <b>New daily report</b> at the start of each day’s work.' : ''}</div></section>`;
     const byDate = {}; j.reports.forEach(r => (byDate[r.report_date] = byDate[r.report_date] || []).push(r));
     return `<section class="panel"><header><h2>Daily Operation Reports</h2><span class="meta">${plural(j.reports.length, 'report')}</span>
-        <span class="right"><button class="btn small" id="jt-xls">${ico('down')}Excel (all reports)</button></span></header>
+        ${j.can_bulk ? `<span class="right"><button class="btn small" data-dl="dor">${ico('down')}Download reports</button></span>` : ''}</header>
       <ul class="list jt-replist">${Object.entries(byDate).map(([d, rs]) => rs.map(r => `<li><a class="main" href="#/jt/report/${r.id}">
         <div class="name">${jtDay(d)} · ${esc(r.well)} <span class="sub">Report ${r.report_no}</span> ${jtChip(JT_RSTATUS, r.status)}${r.photos ? ` <span class="sub">${ico('eye')}${r.photos}</span>` : ''}</div>
         <div class="jt-eqs">${(j.groups || []).map(g => jtEqChip(g, r.equipment?.[g])).join('')}</div>
         <div class="sub">${esc(r.summary || 'No summary yet')}</div>${r.status === 'returned' && r.return_note ? `<div class="sub neg">Sent back: ${esc(r.return_note)}</div>` : ''}</a></li>`).join('')).join('')}</ul></section>`;
+  },
+  // 3.0.11: the HSE Daily Reports, with the job's running totals
+  hse(j) {
+    const list = j.hse || [], T = j.hse_totals || {}, I = T.incidents || {}, A = T.activities || {};
+    const tot = k => +I[k] || 0;
+    const who = j.hse_id ? esc(j.crew.find(c => c.is_hse)?.name || 'The HSE person') : j.crew.some(c => c.is_hse) ? 'The lead engineer' : null;
+    return `<section class="panel"><header><h2>Running totals</h2><span class="meta">${plural(T.reports || 0, 'HSE report')} on this job</span></header><div class="body jt-facts">
+        <div><span>Man-hours</span><b>${jtNum(T.man_hours) || 0}</b></div><div><span>Unsafe acts / conditions</span><b>${tot('ua')} / ${tot('uc')}</b></div>
+        <div><span>Near misses</span><b>${tot('nm')}</b></div><div><span>First aid / medical treatment</span><b>${tot('fac')} / ${tot('mtc')}</b></div>
+        <div><span>Lost time injuries</span><b>${tot('lti')}</b></div><div><span>Toolbox talks</span><b>${+A.tbt || 0}</b></div></div></section>
+      <section class="panel"><header><h2>HSE Daily Reports</h2><span class="meta">${who ? `Filled by ${who}` : 'Tick the HSE person on the crew'}</span>
+        <span class="right">${j.can_bulk && list.length ? `<button class="btn small" data-dl="hse">${ico('down')}Download reports</button>` : ''}${j.hse_who && !S.viewAs && j.status !== 'closed' ? `<a class="btn small tagbtn" href="#/jt/hse/new?job=${j.id}">${ico('plus')}New HSE report</a>` : ''}</span></header>
+      ${list.length ? `<ul class="list jt-replist">${list.map(h => `<li><a class="main" href="#/jt/hse/${h.id}">
+        <div class="name">${jtDay(h.report_date)} · ${esc(h.well)} <span class="sub">Report ${h.report_no}</span> ${jtChip(JT_RSTATUS, h.status)}${h.on_behalf ? ' ' + chip('muted', 'Filled on behalf') : ''}</div>
+        <div class="sub">POB ${h.pob} · ${jtNum(h.man_hours) || 0} man-hours · ${h.ua} UA · ${h.uc} UC${h.tri ? ` · ${chip('overdue', 'TRI ' + h.tri)}` : ''} · ${esc(h.comment || '')}</div>
+        ${h.status === 'returned' && h.return_note ? `<div class="sub neg">Sent back: ${esc(h.return_note)}</div>` : ''}</a></li>`).join('')}</ul>`
+        : `<div class="empty">No HSE reports yet. ${j.hse_id ? `${who} fills one for each well each day. It fills the HSE part of that day’s daily report.` : 'The HSE person on board fills one for each well each day. Tick them on the crew (Wells, crew & items).'}</div>`}</section>`;
   },
   tickets(j) {
     const svc = j.tickets.filter(t => t.kind === 'service'), rb = j.tickets.filter(t => t.kind === 'reimb');
@@ -256,7 +304,10 @@ const jtJob = {
       <section class="panel"><header><h2>Crew</h2><span class="meta">${plural(j.crew.length, 'person', 'people')}</span>${manage ? `<span class="right"><button class="btn small" id="jt-copy">${ico('copy')}Copy from another job</button><button class="btn small" id="jt-crew">${ico('edit')}Edit crew</button></span>` : ''}</header>
         ${j.crew.length ? `<ul class="list">${j.crew.map(c => `<li><div style="flex:1"><div class="name">${esc(c.name)}${c.profile_id === j.lead_id ? ' ' + chip('out', 'Lead') : ''}${c.is_hse ? ' ' + chip('ok', 'HSE') : ''}</div><div class="sub">${esc([c.role, c.company !== 'GANKCO' ? c.company : ''].filter(Boolean).join(' · '))}${c.profile_id ? '' : ' · not in Nest'}</div></div></li>`).join('')}</ul>`
           : '<div class="empty">No crew yet.</div>'}
-        <div class="body muted small">Engineers see and work on the jobs they’re crew on. Subcontractor crew can be typed in by name. ${j.crew.some(c => c.is_hse) ? 'The HSE person fills the HSE part of each daily report.' : 'Mark the HSE person on board (Edit crew) and they fill the HSE part of each daily report.'}</div></section>
+        <div class="body muted small">Everyone can look at this job; the people on its crew work on it. Subcontractor crew can be typed in by name. ${j.crew.some(c => c.is_hse) ? `The HSE person fills the HSE Daily Report, which fills the HSE part of each daily report.${j.hse_id ? '' : ' They’re not on Nest, so the lead fills it.'}` : 'Tick the HSE person on board (Edit crew): they fill the HSE Daily Report, which fills the HSE part of each daily report.'}</div></section>
+      <section class="panel"><header><h2>POB categories</h2><span class="meta">On the HSE report and the daily report</span>${manage ? `<span class="right"><button class="btn small" id="jt-pobcats">${ico('edit')}Change</button></span>` : ''}</header>
+        <div class="body"><div class="jt-cats">${(j.pob_cats || []).map(c => `<span class="linebadge">${esc(jtPobLabel(c, j))}</span>`).join(' ')}</div>
+        <p class="muted small mt">The HSE person counts the people on board in each of these every day. Up to 7.</p></div></section>
       <section class="panel"><header><h2>Ticket items for this job</h2><span class="meta">${plural(items.length, 'item')}</span>${manage ? `<span class="right"><button class="btn small" id="jt-items">${ico('edit')}Choose items</button></span>` : ''}</header>
         ${items.length ? bySec.map(([k, a]) => `<div class="jt-sec">${esc(JT_SEC[k])}</div><ul class="list">${a.map(i => `<li><div style="flex:1"><div class="name">${esc(i.description)}${i.is_new ? ' ' + chip('soon', 'New') : ''}</div>
             <div class="sub">${esc(jtRuleText(i))} · qty ${jtNum(i.qty)}</div></div></li>`).join('')}</ul>`).join('')
@@ -271,7 +322,8 @@ const jtJob = {
     const j = this.j;
     const ed = $('#jt-edit', main); if (ed) ed.onclick = () => jtJobForm(j);
     const st = $('#jt-status', main); if (st) st.onchange = async () => { try { await q(sb.rpc('jt_job_status', { p_id: j.id, p_status: st.value })); toast('Status: ' + JT_STATUS[st.value][1]); render({ quiet: true }); } catch (e) { toast(niceError(e), true); st.value = j.status; } };
-    const xl = $('#jt-xls', main); if (xl) xl.onclick = () => withProgress('Making the Excel file…', () => jtDorWorkbook(j));
+    $$('[data-dl]', main).forEach(b => b.onclick = () => jtDownloadForm(j, b.dataset.dl));
+    const pc = $('#jt-pobcats', main); if (pc) pc.onclick = () => jtPobCatsForm(j);
     const bx = $('#jt-bdx', main); if (bx) bx.onclick = () => jtBreakdownXlsx(j, this.bd);
     const bp = $('#jt-bdp', main); if (bp) bp.onclick = () => jtBreakdownPdf(j, this.bd);
     const nt = $('#jt-newt', main); if (nt) nt.onclick = () => jtNewTicket(j, 'service');
@@ -303,7 +355,7 @@ async function jtCrewForm(j) {
     <input name="company" placeholder="Company" value="${esc(c.company || 'GANKCO')}"><label class="check jt-hsechk" title="The HSE person on board fills the HSE part of each daily report"><input type="checkbox" class="jt-hse" ${c.is_hse ? 'checked' : ''}> HSE</label>
     <button type="button" class="btn small" data-rm title="Remove">${ico('trash')}</button></div>`;
   return modal({ title: 'Crew on ' + j.job_no, wide: true, submit: 'Save crew',
-    sub: 'People with JobTrack who are on the crew can write this job’s daily reports and tickets. Subcontractor crew can be typed in by name. Tick <b>HSE</b> for the HSE person on board: they fill the HSE part of each daily report, and the report can’t be sent until they do. The lead engineer always stays on.',
+    sub: 'The people on the crew work on this job’s daily reports and tickets; everyone else can only look. Subcontractor crew can be typed in by name. Tick <b>HSE</b> for the HSE person on board: they fill the HSE Daily Report each day, which fills the HSE part of the daily report, and they’re reminded at 4pm. The lead engineer always stays on.',
     body: `<div id="jt-crewrows">${j.crew.map(row).join('')}</div><button type="button" class="btn small" id="jt-addcrew">${ico('plus')}Add someone</button>`,
     onOpen: d => {
       const wire = () => { $$('[data-rm]', d).forEach(b => b.onclick = () => b.closest('.jt-crewrow').remove());
@@ -313,9 +365,7 @@ async function jtCrewForm(j) {
     onSubmit: async (x, d) => {
       const rows = $$('.jt-crewrow', d).map(r => ({ profile_id: $('[name=pid]', r).value || null, name: $('[name=name]', r).value.trim(), role: $('[name=role]', r).value.trim(), company: $('[name=company]', r).value.trim(), is_hse: $('.jt-hse', r).checked }))
         .filter(r => r.profile_id || r.name);
-      const h = rows.find(r => r.is_hse);
-      if (h && h.profile_id && (S.jt.cfg.people || []).find(p => p.id === h.profile_id)?.role === 'viewer') throw new Error('The HSE person has view-only JobTrack, so they can’t fill the HSE part. Ask the Developer to make them an Engineer, or untick HSE.');
-      await q(sb.rpc('jt_crew_set', { p_job: j.id, p_rows: rows })); toast('Crew saved'); render({ quiet: true });
+      await q(sb.rpc('jt_crew_set', { p_job: j.id, p_rows: rows })); await jtLoad(true); toast('Crew saved'); render({ quiet: true });
     } });
 }
 // copy the crew and/or ticket items from another job
@@ -331,6 +381,60 @@ async function jtCopyForm(j) {
       toast(`Copied ${plural(c.crew, 'person', 'people')} and ${plural(c.items, 'ticket item')}${c.skipped ? `. ${plural(c.skipped, 'item')} left out: their equipment group isn’t on this job` : ''}`); render({ quiet: true });
     } });
 }
+
+// 3.0.11: the job's POB categories (the HSE person counts each one every day; up to 7 fit the daily report)
+async function jtPobCatsForm(j) {
+  const row = c => `<div class="jt-grow"><input name="cat" value="${esc(c || '')}" placeholder="Category (e.g. Halliburton)" maxlength="30"><button type="button" class="btn small" data-crm title="Remove">${ico('trash')}</button></div>`;
+  return modal({ title: 'POB categories for ' + j.job_no, submit: 'Save',
+    sub: 'The people on board are counted in each of these on the HSE Daily Report, and the same numbers go on the daily report. Keep <b>Client</b> and <b>GANKCO</b>: the client category shows with the client’s name.',
+    body: `<div id="jt-cats">${(j.pob_cats || []).map(row).join('')}</div><button type="button" class="btn small" id="jt-catadd">${ico('plus')}Add a category</button>`,
+    onOpen: d => { const box = $('#jt-cats', d); const wire = () => $$('[data-crm]', d).forEach(b => b.onclick = () => b.closest('.jt-grow').remove());
+      wire(); $('#jt-catadd', d).onclick = () => { if ($$('[name=cat]', d).length >= 7) return toast('Up to 7 categories fit the daily report.', true); box.insertAdjacentHTML('beforeend', row('')); wire(); $$('[name=cat]', d).pop().focus(); }; },
+    onSubmit: async (x, d) => {
+      const cats = $$('[name=cat]', d).map(i => i.value.trim()).filter(Boolean);
+      if (!cats.length) throw new Error('Keep at least one category.');
+      await q(sb.rpc('jt_job_save', { p: { ...j, client_id: j.client_id, groups: j.groups, pob_cats: cats } })); toast('POB categories saved'); render({ quiet: true });
+    } });
+}
+
+// 3.0.11: download a job's daily reports or HSE reports, as one PDF or one Excel file
+async function jtDownloadForm(j, kind) {
+  const all = { dor: j.reports || [], hse: j.hse || [] };
+  const dates = l => l.map(r => r.report_date).sort();
+  return modal({ title: 'Download reports', submit: 'Download', sub: `${esc(j.job_no)}: every report you choose goes in one file, in date order.`,
+    body: `<div class="row2"><label class="f">Reports<select name="kind">${opt('dor', 'Daily operation reports', kind)}${opt('hse', 'HSE daily reports', kind)}</select></label>
+        <label class="f">Format<select name="fmt">${opt('pdf', 'PDF (one page a report)', 'pdf')}${opt('xlsx', 'Excel (one sheet a report)', 'pdf')}</select></label></div>
+      <div class="row2"><label class="f">Wells<select name="well"><option value="">All wells</option>${j.wells.map(w => opt(w.id, w.name, '')).join('')}</select></label>
+        <label class="f">Dates<select name="range">${opt('all', 'The whole job', 'all')}${opt('pick', 'From … to …', 'all')}</select></label></div>
+      <div class="row2 jt-dlrange" hidden><label class="f">From<input type="date" name="from"></label><label class="f">To<input type="date" name="to"></label></div>
+      <label class="check"><input type="checkbox" name="drafts"> Include reports that haven’t been sent (marked DRAFT)</label>
+      <label class="check jt-dlph"><input type="checkbox" name="photos"> Add the daily reports’ photos at the back</label>
+      <p class="muted small mt" id="jt-dlcount"></p>`,
+    onOpen: d => {
+      const f = $('form', d) || d;
+      const pick = () => { const x = Object.fromEntries(new FormData($('form', d)).entries());
+        return (all[x.kind] || []).filter(r => (!x.well || r.well_id === +x.well) && (x.range !== 'pick' || ((!x.from || r.report_date >= x.from) && (!x.to || r.report_date <= x.to))) && (x.drafts || !['draft', 'returned'].includes(r.status))); };
+      const draw = () => { const x = Object.fromEntries(new FormData($('form', d)).entries()); const l = pick(); const lft = (all[x.kind] || []).filter(r => ['draft', 'returned'].includes(r.status)).length;
+        $('.jt-dlrange', d).hidden = x.range !== 'pick'; $('.jt-dlph', d).hidden = x.kind !== 'dor' || x.fmt !== 'pdf';
+        const ds = dates(l); $('#jt-dlcount', d).textContent = l.length ? `${plural(l.length, 'report')}${ds.length ? `, ${fd(ds[0])} to ${fd(ds[ds.length - 1])}` : ''}.${!x.drafts && lft ? ` ${plural(lft, 'report')} not sent yet ${lft === 1 ? 'is' : 'are'} left out.` : ''}` : 'No reports match.'; };
+      const ds = dates([...all.dor, ...all.hse]); if (ds.length) { $('[name=from]', d).value = ds[0]; $('[name=to]', d).value = ds[ds.length - 1]; }
+      $$('select, input', d).forEach(e => e.addEventListener('change', draw)); draw(); d._pick = pick;
+    },
+    onSubmit: async (x, d) => {
+      const list = d._pick(); if (!list.length) throw new Error('No reports match. Change the wells or dates, or include the drafts.');
+      const ids = list.map(r => r.id);
+      const what = `${x.kind === 'hse' ? 'HSE reports' : 'Daily reports'} (${plural(ids.length, 'report')}, ${x.fmt === 'pdf' ? 'PDF' : 'Excel'})`;
+      await q(sb.rpc('jt_download_log', { p_job: j.id, p_file: what, p_bulk: true }));
+      setTimeout(() => withProgress(`Making the ${x.fmt === 'pdf' ? 'PDF' : 'Excel file'}…`, async set => {
+        try {
+          if (x.kind === 'hse') await (x.fmt === 'pdf' ? jtHsePdfMany(j, ids, set) : jtHseWorkbook(j, ids, set));
+          else await (x.fmt === 'pdf' ? jtDorPdfMany(j, ids, !!x.photos, set) : jtDorWorkbook(j, ids, set));
+        } catch (e) { toast(niceError(e), true); }
+      }), 0);
+    } });
+}
+// a single report downloaded: noted in the audit log (quietly)
+const jtLogOne = (jobId, file) => { if (jobId) q(sb.rpc('jt_download_log', { p_job: jobId, p_file: file, p_bulk: false })).catch(() => { }); };
 
 // choose the job's ticket items: from the list, from Inventory, or typed in
 async function jtJobItemsForm(j) {
@@ -450,12 +554,45 @@ const jtOutbox = () => { try { return JSON.parse(localStorage.getItem(JT_OUT) ||
 const jtOutboxSet = a => { try { localStorage.setItem(JT_OUT, JSON.stringify(a)); } catch (e) { } };
 const jtNetErr = e => !navigator.onLine || /failed to fetch|networkerror|load failed|network request failed|reach the server/i.test(String(e?.message || e));
 let jtFlushing = false;
+// 3.0.11: what JobTrack last loaded is kept on this phone, so it opens with no signal (and says how old it is)
+const jtCacheKey = k => `nest.jt.cache.${S.profile?.id || ''}.${k}`;
+const jtCacheGet = k => { try { return JSON.parse(localStorage.getItem(jtCacheKey(k)) || 'null'); } catch (e) { return null; } };
+function jtCachePut(k, v) {
+  const val = JSON.stringify({ at: Date.now(), v });
+  try { localStorage.setItem(jtCacheKey(k), val); }
+  catch (e) {   // the phone's storage is full: drop the oldest half of what's kept, then try once more
+    const ks = Object.keys(localStorage).filter(x => x.startsWith('nest.jt.cache.')).map(x => [x, (() => { try { return JSON.parse(localStorage.getItem(x)).at; } catch (er) { return 0; } })()]).sort((a, b) => a[1] - b[1]);
+    ks.slice(0, Math.ceil(ks.length / 2)).forEach(([x]) => localStorage.removeItem(x));
+    try { localStorage.setItem(jtCacheKey(k), val); } catch (er) { }
+  }
+}
+async function jtCached(k, fetch) {
+  if (!navigator.onLine) { const c = jtCacheGet(k); if (c) { jtOfflineNote(c.at); return c.v; } }
+  try { const v = await fetch(); jtCachePut(k, v); return v; }
+  catch (e) { if (!jtNetErr(e)) throw e; const c = jtCacheGet(k); if (!c) throw new Error('There’s no signal, and this page hasn’t been opened on this phone before. Try again when you’re back online.'); jtOfflineNote(c.at); return c.v; }
+}
+// the jobs you're on, kept ready in the background
+let jtPrefetched = 0;
+function jtPrefetch(ids) {
+  if (!ids.length || Date.now() - jtPrefetched < 10 * 60000) return; jtPrefetched = Date.now();
+  ids.slice(0, 8).forEach((id, i) => setTimeout(() => { if (navigator.onLine) jtCached('job.' + id, () => q(sb.rpc('jt_job_get', { p_id: id }))).catch(() => { }); }, 1500 + i * 800));
+}
+function jtOfflineNote(at) {
+  setTimeout(() => { const m = $('#main'); if (!m || $('#jt-offnote', m)) return;
+    m.insertAdjacentHTML('afterbegin', `<div class="notice jt-wait" id="jt-offnote">${ico('clock')} No signal: this is what was saved on this phone ${fdt(at)}. Reports you save are sent when you’re back online.</div>`); }, 0);
+}
 async function jtFlush() {
-  const box = jtOutbox(); if (!box.length || jtFlushing || !navigator.onLine) return; jtFlushing = true;
+  // opened with no signal: the outbox waits until Nest reconnects with a fresh sign-in
+  const box = jtOutbox(); if (!box.length || jtFlushing || !navigator.onLine || S.offline) return; jtFlushing = true;
   const left = [];
   for (const x of box) {
-    try { const id = await q(sb.rpc('jt_report_save', { p: x.p })); if (x.submit) await q(sb.rpc('jt_report_submit', { p_id: id })); try { localStorage.removeItem(x.key); } catch (e) { } toast(`Sent: daily report for ${x.label}`); }
-    catch (e) { if (jtNetErr(e)) left.push(x); else { left.push({ ...x, error: niceError(e) }); toast(`The daily report for ${x.label} couldn’t be sent: ${niceError(e)} Open it, fix it and send again.`, true); } }
+    const what = x.kind === 'hse' ? 'HSE report' : 'daily report';
+    try {
+      const id = await q(sb.rpc(x.kind === 'hse' ? 'jt_hse_save' : 'jt_report_save', { p: x.p }));
+      if (x.submit) await q(sb.rpc(x.kind === 'hse' ? 'jt_hse_submit' : 'jt_report_submit', { p_id: id }));
+      try { localStorage.removeItem(x.key); } catch (e) { } toast(`Sent: ${what} for ${x.label}`);
+    }
+    catch (e) { if (jtNetErr(e)) left.push(x); else { left.push({ ...x, error: niceError(e) }); toast(`The ${what} for ${x.label} couldn’t be sent: ${niceError(e)} Open it, fix it and send again.`, true); } }
   }
   jtOutboxSet(left); jtFlushing = false;
 }
@@ -499,34 +636,33 @@ const jtReport = {
     if (parts[2] === 'new') {
       const jobId = +params?.get('job');
       if (!jobId) return this.picker();
-      const j = this.j = await q(sb.rpc('jt_job_get', { p_id: jobId }));
-      if (!j.can_write) return topbar('New daily report') + `<div class="notice">You’re not on the crew of ${esc(j.job_no)}. Ask an operations manager to add you.</div>`;
+      const j = this.j = await jtCached('job.' + jobId, () => q(sb.rpc('jt_job_get', { p_id: jobId })));
+      if (!j.can_write) return topbar('New daily report') + `<div class="notice">You’re not on the crew of ${esc(j.job_no)}. Ask an operations manager to add you.</div><a class="btn" href="#/jt/job/${j.id}">Open the job</a>`;
       const date = params.get('date') || localISO(0);
       let wellId = +params.get('well') || (j.reports[0]?.well_id) || j.wells[j.wells.length - 1]?.id || null;
       // an existing report for that well and day opens instead
       const ex = j.reports.find(r => r.well_id === wellId && r.report_date === date);
       if (ex) { setTimeout(() => go('#/jt/report/' + ex.id), 0); return '<div class="loading">Opening…</div>'; }
-      const prev = (await q(sb.from('jt_reports').select('*').eq('job_id', j.id).lte('report_date', date).order('report_date', { ascending: false }).limit(1)))[0];
-      // POB from the crew (it can still be changed on the day)
-      const gk = j.crew.filter(c => (c.company || 'GANKCO').toUpperCase() === 'GANKCO').length, oth = j.crew.length - gk;
+      // the last report before this day (from the job's list when there's no signal)
+      let prev = null;
+      try { if (!navigator.onLine) throw new Error('Failed to fetch'); prev = (await q(sb.from('jt_reports').select('client_reps,gankco_rep,equipment').eq('job_id', j.id).lte('report_date', date).order('report_date', { ascending: false }).limit(1)))[0]; }
+      catch (e) { if (!jtNetErr(e)) throw e; prev = j.reports.find(r => r.report_date <= date) || null; }
       const hseCrew = j.crew.find(c => c.is_hse);
       this.r = { id: null, job_id: j.id, well_id: wellId, report_date: date, status: 'draft', client_reps: prev?.client_reps || j.client_reps || '', gankco_rep: prev?.gankco_rep || j.lead_name || '',
-        man_hours: prev?.man_hours ?? '', tri: 0, lti: false, hse_comment: 'No incident / accident', summary: '', ops: [{ from: '06:00', desc: '' }], day_end: '', weather: prev?.weather || '',
-        equipment: prev?.equipment || {}, comments: '', look_ahead: '', pob_client: prev?.pob_client ?? '', pob_gankco: j.crew.length ? gk : prev?.pob_gankco ?? '', pob_others: j.crew.length ? oth : prev?.pob_others ?? '',
-        photos: [], can_edit: true, hse_id: j.hse_id || null, hse_name: hseCrew?.name || '', is_hse: !!j.is_hse, is_lead: j.lead_id === S.profile.id };
+        summary: '', ops: [{ from: '06:00', desc: '' }], day_end: '', equipment: prev?.equipment || {}, comments: '', look_ahead: '',
+        photos: [], can_edit: true, hse_id: j.hse_id || null, hse_name: hseCrew?.name || '', hse_who: j.hse_who, is_hse: !!j.is_hse, is_lead: j.lead_id === S.profile.id };
       this.key = `nest.jt.dor.new.${j.id}`;
     } else {
       const id = +parts[2];
-      const r = this.r = await q(sb.rpc('jt_report_get', { p_id: id }));
-      this.j = await q(sb.rpc('jt_job_get', { p_id: r.job_id }));
+      const r = this.r = await jtCached('report.' + id, () => q(sb.rpc('jt_report_get', { p_id: id })));
+      this.j = await jtCached('job.' + r.job_id, () => q(sb.rpc('jt_job_get', { p_id: r.job_id })));
       this.key = `nest.jt.dor.${id}`;
     }
     const local = (() => { try { return JSON.parse(localStorage.getItem(this.key) || 'null'); } catch (e) { return null; } })();
     this.local = local && (!this.r.updated_at || local.at > new Date(this.r.updated_at).getTime()) ? local : null;
-    if (this.local?.behalf) this.behalf = true;
-    // the HSE person on board (not the lead) fills just the HSE part
+    // the HSE person on board (not the lead) reads the daily report; their own part is the HSE Daily Report
     this.hseOnly = !!(this.r.id && this.r.is_hse && !this.r.is_lead && !jtAdmin());
-    return this.hseOnly ? this.hsePage() : this.r.can_edit ? this.form() : this.view();
+    return this.hseOnly || !this.r.can_edit || S.viewAs ? this.view() : this.form();
   },
   // which job? (from the phone bar)
   async picker() {
@@ -541,37 +677,25 @@ const jtReport = {
     return `<div class="jt-rhead"><div><div class="jt-rjob">${esc(j.job_no)} · ${esc(j.client?.short_name || j.client?.name || '')}</div>
       <div class="jt-rmeta">${r.id ? `Report ${r.report_no} · day ${r.report_no} on this well · ` : ''}${r.id ? jtChip(JT_RSTATUS, r.status) : chip('muted', 'New')}${r.submitted_by_name ? ` <span class="sub">sent by ${esc(r.submitted_by_name)} ${fdt(r.submitted_at)}</span>` : ''}${r.reviewed_by_name ? ` <span class="sub">· reviewed by ${esc(r.reviewed_by_name)}</span>` : ''}</div></div></div>`;
   },
-  // who fills the HSE part here: 'open' (you can type it) or 'locked' (the HSE person does)
-  hseMode() {
-    const r = this.r;
-    if (!r.hse_id || r.is_hse) return 'open';
-    return this.behalf ? 'open' : 'locked';
-  },
-  canBehalf() { return jtAdmin() || this.j.lead_id === S.profile.id; },
-  hseStatus() {
-    const r = this.r;
-    if (r.hse_at) return chip('ok', `Filled by ${r.hse_by_name || ''}${r.hse_on_behalf ? ` for ${r.hse_name || 'HSE'}` : ''}`);
-    return r.hse_id ? chip('pending', `Waiting for ${r.hse_name || 'HSE'}`) : chip('muted', 'Not filled yet');
-  },
-  hseFields(v) {
-    return `<div class="row3"><label class="f">Total man-hours<input type="number" name="man_hours" min="0" step="any" value="${esc(v.man_hours ?? '')}"></label>
-        <label class="f">TRI<input type="number" name="tri" min="0" step="1" value="${esc(v.tri ?? 0)}"></label>
-        <label class="check jt-ltichk"><input type="checkbox" name="lti" ${v.lti ? 'checked' : ''}> A lost-time injury (LTI) today</label></div>
-      <label class="f">HSE comment<input name="hse_comment" value="${esc(v.hse_comment || '')}" placeholder="No incident / accident"></label>`;
-  },
-  hseSection(v) {
-    const r = this.r, mode = this.hseMode(); const who = r.hse_name || 'the HSE person';
-    const head = `<header><h2>HSE</h2><span class="meta">Days without LTI: <b id="jt-lti">${r.lti_days ?? '—'}</b></span><span class="right">${r.hse_id || r.hse_at ? this.hseStatus() : ''}</span></header>`;
-    if (mode === 'open') return `<section class="panel jt-hse" id="jt-hsebox">${head}<div class="body">
-      ${this.behalf ? `<div class="notice">You’re filling this on behalf of ${esc(who)}. It’s recorded that you did. <button type="button" class="btn small" id="jt-hseundo">Leave it to ${esc(who)}</button></div>` : ''}
-      ${!r.hse_id && this.j.crew.some(c => c.is_hse) ? `<p class="muted small">For ${esc(this.j.crew.find(c => c.is_hse).name)} (HSE, not in Nest).</p>` : ''}
-      ${this.hseFields(v)}</div></section>`;
-    const filled = !!r.hse_at;
-    return `<section class="panel jt-hse locked" id="jt-hsebox">${head}<div class="body">
-      ${filled ? `<div class="jt-facts"><div><span>Man-hours</span><b>${jtNum(r.man_hours) || '—'}</b></div><div><span>TRI</span><b>${r.tri ?? 0}</b></div><div><span>LTI today</span><b>${r.lti ? 'Yes' : 'No'}</b></div><div><span>HSE comment</span><b>${esc(r.hse_comment || '—')}</b></div></div>`
-        : `<p class="muted">${esc(who)} (HSE on board) fills this part${r.id ? '' : ' once the report is saved'}. The report can’t be sent until it’s filled.</p>`}
-      ${['draft', 'returned'].includes(r.status || 'draft') ? `<div class="actionrow">${r.id && !filled ? `<button type="button" class="btn small" id="jt-hserem">${ico('bell')}Remind ${esc(r.hse_name || 'HSE')}</button>` : ''}
-        ${this.canBehalf() ? `<button type="button" class="btn small" id="jt-hsemine">${ico('edit')}${filled ? 'Change it myself' : 'Fill it myself'}</button>` : ''}</div>` : ''}</div></section>`;
+  // 3.0.11: the HSE part comes from the HSE Daily Report for this well and day
+  hseDay() { const r = this.r; return r.hse || (this.j.hse || []).find(h => h.well_id === r.well_id && h.report_date === r.report_date) || null; },
+  hseBox() {
+    const r = this.r, j = this.j, day = this.hseDay(); const who = r.hse_name || j.crew?.find(c => c.is_hse)?.name || ''; const me = S.viewAs ? null : (r.hse_who ?? j.hse_who);
+    const open = ['draft', 'returned'].includes(r.status || 'draft');
+    const newLink = `#/jt/hse/new?job=${j.id}&well=${r.well_id}&date=${r.report_date}`;
+    const state = day ? chip(day.status === 'draft' ? 'muted' : 'ok', `HSE report in${day.by ? ' · ' + day.by : ''}${day.on_behalf ? ' (on behalf)' : ''}`) : chip('pending', who ? `Waiting for ${who}` : 'Not in yet');
+    const facts = r.hse_at ? `<div class="jt-facts"><div><span>Weather</span><b>${esc(r.weather || '—')}</b></div><div><span>POB</span><b>${esc(jtPobText(r.pob, j, r))}</b></div>
+        <div><span>Man-hours</span><b>${jtNum(r.man_hours) || '—'}</b></div><div><span>TRI</span><b>${r.tri ?? 0}</b></div><div><span>LTI today</span><b>${r.lti ? 'Yes' : 'No'}</b></div>
+        <div><span>HSE comment</span><b>${esc(r.hse_comment || '—')}</b></div></div>`
+      : day ? `<p class="muted">The HSE report for this well and day is in. Its figures show here once you save.</p>`
+      : `<p class="muted">${who ? `${esc(who)} (HSE)` : 'The lead engineer'} fills the HSE Daily Report for this well and day. Its weather, POB, man-hours and HSE figures come here, and this report can’t be sent until it’s in.</p>`;
+    const btns = [day ? `<a class="btn small" href="#/jt/hse/${day.id}">${ico('cert')}Open the HSE report</a>` : '',
+      !day && open && me === 'hse' ? `<a class="btn small tagbtn" href="${newLink}">${ico('plus')}Fill your HSE report</a>` : '',
+      !day && open && me === 'own' ? `<a class="btn small tagbtn" href="${newLink}">${ico('plus')}Fill the HSE report</a>` : '',
+      !day && open && me === 'behalf' && r.id ? `<button type="button" class="btn small" id="jt-hserem">${ico('bell')}Remind ${esc(who || 'HSE')}</button>` : '',
+      !day && open && me === 'behalf' ? `<a class="btn small" href="${newLink}">${ico('edit')}Fill it myself</a>` : ''].filter(Boolean).join('');
+    return `<section class="panel jt-hse ${day ? '' : 'locked'}" id="jt-hsebox"><header><h2>HSE</h2><span class="meta">From the HSE Daily Report · days without LTI: <b>${r.lti_days ?? '—'}</b></span><span class="right">${state}</span></header>
+      <div class="body">${facts}${btns ? `<div class="actionrow">${btns}</div>` : ''}</div></section>`;
   },
   opRow(o) {
     return `<div class="jt-op"><input type="time" class="jt-from" value="${esc(o.from || '')}" aria-label="Started at"><span class="jt-hrs"></span>
@@ -602,17 +726,13 @@ const jtReport = {
       <section class="panel"><header><h2>Daily operations summary (24 hr)</h2><span class="right"><button type="button" class="btn small" id="jt-sumgo">${ico('undo')}Rebuild from activities</button></span></header><div class="body">
         <textarea name="summary" rows="4" placeholder="Written for you from the activities. You can change it.">${esc(v.summary || '')}</textarea>
         <p class="muted small" id="jt-sumnote">Written from today’s activities. Your changes are kept unless you press Rebuild.</p></div></section>
-      <section class="panel"><header><h2>Weather condition</h2><span class="meta">For the WhatsApp update</span></header><div class="body">
-        <input name="weather" value="${esc(v.weather || '')}" placeholder="Calm and Cloudy" list="jt-wx"><datalist id="jt-wx">${['Calm and Cloudy', 'Sunny', 'Calm and Sunny', 'Cloudy', 'Rainy', 'Light rain', 'Heavy rain', 'Windy', 'Stormy'].map(x => `<option value="${x}">`).join('')}</datalist></div></section>
       <section class="panel"><header><h2>Equipment status today</h2><span class="meta">Tickets count operating and standby days from this</span></header><div class="body jt-eqset">
         ${groups.map(g => `<div class="jt-eqrow"><b>${esc(g)}</b><div class="seg jt-eqseg" data-g="${esc(g)}">${Object.entries(JT_EQ).map(([k, x]) => `<button type="button" data-v="${k}" class="${v.equipment?.[g] === k ? 'on ' + x[0] : ''}">${x[1]}</button>`).join('')}</div></div>`).join('')}
         <p class="muted small">Op: working. Stdby: on location, not working. Mob/Demob: moving in or out. Off: not on location.</p></div></section>
-      ${this.hseSection(v)}
+      ${this.hseBox()}
       <section class="panel"><header><h2>People</h2></header><div class="body">
         <div class="row2"><label class="f">Client rep(s)<input name="client_reps" value="${esc(v.client_reps || '')}"></label><label class="f">GANKCO rep<input name="gankco_rep" value="${esc(v.gankco_rep || '')}"></label></div>
-        <div class="row3"><label class="f">POB · client<input type="number" min="0" name="pob_client" value="${esc(v.pob_client ?? '')}"></label><label class="f">POB · GANKCO<input type="number" min="0" name="pob_gankco" value="${esc(v.pob_gankco ?? '')}"></label>
-          <label class="f">POB · others<input type="number" min="0" name="pob_others" value="${esc(v.pob_others ?? '')}"></label></div>
-        ${!r.id && j.crew.length ? '<p class="muted small">GANKCO and others are counted from the job’s crew. Change them if today is different.</p>' : ''}</div></section>
+        <p class="muted small">The POB comes from the HSE report.</p></div></section>
       <section class="panel"><header><h2>Comments and look ahead</h2></header><div class="body">
         <label class="f">General comments / observations<textarea name="comments" rows="2">${esc(v.comments || '')}</textarea></label>
         <label class="f">Look ahead<textarea name="look_ahead" rows="2" placeholder="Drift well and conduct BHP survey">${esc(v.look_ahead || '')}</textarea></label></div></section>
@@ -636,23 +756,19 @@ const jtReport = {
     const eq = {}; $$('.jt-eqseg', main).forEach(s => { const on = $('button.on', s); if (on) eq[s.dataset.g] = on.dataset.v; });
     const ops = this.opsNow(main).filter(o => o.desc);
     const p = { id: this.r.id, job_id: this.j.id, well_id: +x.well_id || null, report_date: x.report_date, client_reps: x.client_reps, gankco_rep: x.gankco_rep,
-      summary: x.summary, ops, day_end: x.day_end || '', weather: x.weather, equipment: eq, comments: x.comments, look_ahead: x.look_ahead,
-      pob_client: x.pob_client, pob_gankco: x.pob_gankco, pob_others: x.pob_others };
-    if (this.hseMode() === 'open') { p.hse = { man_hours: x.man_hours, tri: x.tri, lti: !!$('[name=lti]', f)?.checked, hse_comment: x.hse_comment }; if (this.behalf) p.hse_on_behalf = true; }
+      summary: x.summary, ops, day_end: x.day_end || '', equipment: eq, comments: x.comments, look_ahead: x.look_ahead };
     return p;
   },
-  viewBody(hseEditable) {
+  viewBody() {
     const r = this.r, j = this.j;
     const spans = (r.ops || []).map(o => ({ ...o, mins: jtMins(o.from, o.to) }));
     const tot = spans.reduce((a, o) => a + (o.mins || 0), 0);
     return `${r.status === 'returned' && r.return_note ? `<div class="notice bad"><b>Sent back:</b> ${esc(r.return_note)}</div>` : ''}
-      ${hseEditable || ''}
+      ${this.hseOnly ? this.hseBox() : ''}
       <section class="panel"><div class="body jt-facts">
         <div><span>Client</span><b>${esc(j.client?.name || '')}</b></div><div><span>Client rep(s)</span><b>${esc(r.client_reps || '—')}</b></div><div><span>GANKCO rep</span><b>${esc(r.gankco_rep || '—')}</b></div>
-        <div><span>Field · well</span><b>${esc([r.well_field, r.well].filter(Boolean).join(' · '))}</b></div><div><span>Project</span><b>${esc(j.project || '—')}</b></div><div><span>Weather</span><b>${esc(r.weather || '—')}</b></div>
-        ${hseEditable ? '' : `<div><span>Man-hours</span><b>${jtNum(r.man_hours) || '—'}</b></div><div><span>Days without LTI</span><b>${r.lti_days ?? '—'}</b></div><div><span>TRI</span><b>${r.tri ?? 0}</b></div>
-        <div><span>HSE</span><b>${esc(r.hse_comment || '—')}</b>${r.hse_by_name ? `<span class="sub">by ${esc(r.hse_by_name)}${r.hse_on_behalf ? ` for ${esc(r.hse_name || 'HSE')}` : ''}</span>` : ''}</div>`}
-        <div><span>POB (client / GANKCO / others)</span><b>${[r.pob_client, r.pob_gankco, r.pob_others].map(x => x ?? '—').join(' / ')}</b></div></div></section>
+        <div><span>Field · well</span><b>${esc([r.well_field, r.well].filter(Boolean).join(' · '))}</b></div><div><span>Project</span><b>${esc(j.project || '—')}</b></div></div></section>
+      ${this.hseOnly ? '' : this.hseBox()}
       <section class="panel"><header><h2>Equipment status</h2></header><div class="body jt-eqs">${(j.groups || []).map(g => jtEqChip(g, r.equipment?.[g])).join('')}</div></section>
       <section class="panel"><header><h2>Daily operations summary (24 hr)</h2></header><div class="body jt-pre">${esc(r.summary || '—')}</div></section>
       <section class="panel"><header><h2>Activities</h2><span class="meta">${jtHm(tot)} h</span></header>
@@ -667,17 +783,6 @@ const jtReport = {
       `<div class="jt-actbar">${admin && r.status === 'submitted' ? `<button class="btn" id="jt-back">${ico('undo')}Send back</button><button class="btn primary" id="jt-ok">${ico('check')}Mark reviewed</button>` : ''}
         <button class="btn" id="jt-wa">${ico('chat')}WhatsApp</button><button class="btn" id="jt-pdf">${ico('pdf')}PDF</button><button class="btn" id="jt-xl">${ico('down')}Excel</button></div>`;
   },
-  // the HSE person on board: their part to fill, and the rest of the report to read
-  hsePage() {
-    const r = this.r, j = this.j; const open = ['draft', 'returned'].includes(r.status);
-    const box = `<form id="jt-hseform"><section class="panel jt-hse mine"><header><h2>Your HSE section</h2><span class="meta">Days without LTI: <b>${r.lti_days ?? '—'}</b></span><span class="right">${this.hseStatus()}</span></header><div class="body">
-      ${open ? `<p class="muted small">You’re the HSE person on ${esc(j.job_no)}. The lead can’t send this report until you fill this.</p>${this.hseFields(r.hse_at ? r : { ...r, man_hours: r.man_hours ?? '', hse_comment: r.hse_comment || 'No incident / accident' })}
-        <div class="acc-save"><button class="btn primary" type="submit">${ico('check')}Save HSE</button></div>`
-        : `<div class="jt-facts"><div><span>Man-hours</span><b>${jtNum(r.man_hours) || '—'}</b></div><div><span>TRI</span><b>${r.tri ?? 0}</b></div><div><span>LTI today</span><b>${r.lti ? 'Yes' : 'No'}</b></div><div><span>HSE comment</span><b>${esc(r.hse_comment || '—')}</b></div></div>
-        <p class="muted small">The report has been ${r.status === 'reviewed' ? 'reviewed' : 'sent'}. An operations manager can send it back if HSE needs changing.</p>`}</div></section></form>`;
-    return topbar(`Daily report · ${esc(r.well)}`, jtDay(r.report_date), `<a class="btn" href="#/jt/job/${j.id}">Back to job</a>`) + this.head() + this.viewBody(box) +
-      `<div class="jt-actbar"><button class="btn" id="jt-wa">${ico('chat')}WhatsApp</button><button class="btn" id="jt-pdf">${ico('pdf')}PDF</button><button class="btn" id="jt-xl">${ico('down')}Excel</button></div>`;
-  },
   bind(main) {
     const r = this.r; if (!r) return; const self = this;
     // photos
@@ -687,20 +792,14 @@ const jtReport = {
     const wa = () => jtShareWhatsApp(live(), this.j);
     ['#jt-wa', '#jt-wa2'].forEach(k => { const b = $(k, main); if (b) b.onclick = wa; });
     const pdf = $('#jt-pdf', main); if (pdf) pdf.onclick = () => jtDorPdfAsk(r.id, this.j);
-    const xl = $('#jt-xl', main); if (xl) xl.onclick = () => withProgress('Making the Excel file…', async () => { try { await jtDorWorkbook(this.j, [r.id]); } catch (e) { toast(niceError(e), true); } });
+    const xl = $('#jt-xl', main); if (xl) xl.onclick = () => withProgress('Making the Excel file…', async () => { try { const n = await jtDorWorkbook(this.j, [r.id]); jtLogOne(this.j.id, n); } catch (e) { toast(niceError(e), true); } });
+    const rem0 = $('#jt-hserem', main); if (rem0) rem0.onclick = async () => { try { const who = await q(sb.rpc('jt_hse_remind', { p_id: r.id })); toast(`${who} has been reminded`); rem0.disabled = true; } catch (e) { toast(niceError(e), true); } };
     const ok = $('#jt-ok', main); if (ok) ok.onclick = async () => { try { await q(sb.rpc('jt_report_review', { p_id: r.id, p_ok: true, p_note: null })); toast('Reviewed'); render({ quiet: true }); } catch (e) { toast(niceError(e), true); } };
     const bk = $('#jt-back', main); if (bk) bk.onclick = () => modal({ title: 'Send this report back', submit: 'Send back', body: '<label class="f">What needs changing?<textarea name="note" rows="3" required></textarea></label>',
       onSubmit: async x => { await q(sb.rpc('jt_report_review', { p_id: r.id, p_ok: false, p_note: x.note })); toast('Sent back'); render({ quiet: true }); } });
-    // the HSE person's own part
-    const hf = $('#jt-hseform', main); if (hf) hf.onsubmit = async e => {
-      e.preventDefault(); const x = Object.fromEntries(new FormData(hf).entries());
-      if (x.man_hours === '' || !String(x.hse_comment || '').trim()) return toast('Fill the man-hours and the HSE comment.', true);
-      try { await q(sb.rpc('jt_report_hse', { p_id: r.id, p: { man_hours: x.man_hours, tri: x.tri, lti: !!hf.lti?.checked, hse_comment: x.hse_comment } })); toast('HSE saved. The lead can now send the report.'); render({ quiet: true }); }
-      catch (e2) { toast(niceError(e2), true); }
-    };
-    if (!r.can_edit || this.hseOnly) return;
+    if (!r.can_edit || this.hseOnly || !$('#jt-dor', main)) return;
     // typing: keep a copy on the phone
-    const keep = debounce(() => { try { localStorage.setItem(this.key, JSON.stringify({ at: Date.now(), behalf: this.behalf, data: this.collect(main) })); } catch (e) { } }, 600);
+    const keep = debounce(() => { try { localStorage.setItem(this.key, JSON.stringify({ at: Date.now(), data: this.collect(main) })); } catch (e) { } }, 600);
     const ops = $('#jt-ops', main), endIn = $('[name=day_end]', main), sum = $('[name=summary]', main);
     // the summary follows the activities until someone edits it
     sum.dataset.auto = !sum.value.trim() || sum.value.trim() === jtAutoSummary(this.opsNow(main).filter(o => o.desc)) ? '1' : '';
@@ -739,11 +838,6 @@ const jtReport = {
     $('#jt-endnow', main).onclick = () => { endIn.value = jtNowHM(); durations(); keep(); };
     $$('.jt-eqseg', main).forEach(s => $$('button', s).forEach(b => b.onclick = () => { $$('button', s).forEach(x => x.className = ''); b.className = 'on ' + JT_EQ[b.dataset.v][0]; keep(); }));
     $('#jt-dor', main).addEventListener('input', keep); $('#jt-dor', main).addEventListener('change', keep);
-    // the HSE part
-    const rem = $('#jt-hserem', main); if (rem) rem.onclick = async () => { try { const who = await q(sb.rpc('jt_hse_remind', { p_id: r.id })); toast(`${who} has been reminded`); rem.disabled = true; } catch (e) { toast(niceError(e), true); } };
-    const mine = $('#jt-hsemine', main); if (mine) mine.onclick = () => { const cur = this.collect(main); this.behalf = true;
-      $('#jt-hsebox', main).outerHTML = this.hseSection(r.hse_at ? r : { ...r, man_hours: r.man_hours ?? cur.man_hours ?? '', hse_comment: r.hse_comment || 'No incident / accident' }); this.bindHse(main, keep); keep(); };
-    this.bindHse(main, keep);
     const dis = $('#jt-discard', main); if (dis) dis.onclick = () => { try { localStorage.removeItem(this.key); } catch (e) { } render({ quiet: true }); };
     const aw = $('#jt-addwell2', main); if (aw) aw.onclick = async e => { e.preventDefault(); keep(); const id = await jtWellForm(this.j); if (id) { this.j = await q(sb.rpc('jt_job_get', { p_id: this.j.id })); } };
     const save = async submit => {
@@ -755,8 +849,7 @@ const jtReport = {
         if (!p.day_end) return toast('Give the time the day ended (when the last activity finished)', true);
         const miss = (this.j.groups || []).filter(g => !p.equipment[g]); if (miss.length) return toast('Set the equipment status for ' + miss.join(', '), true);
         if (!String(p.summary || '').trim()) return toast('Write the daily operations summary first', true);
-        if (p.hse && (p.hse.man_hours === '' || !String(p.hse.hse_comment || '').trim())) return toast('Fill the HSE section (man-hours and the HSE comment) first', true);
-        if (!p.hse && !r.hse_at) return toast(`The HSE section isn’t filled yet. Ask ${r.hse_name || 'the HSE person'} to fill it, or fill it on their behalf.`, true);
+        // whether the HSE report is in is checked when sending (it may have arrived since this page opened)
       }
       try {
         const id = await q(sb.rpc('jt_report_save', { p }));
@@ -786,12 +879,231 @@ const jtReport = {
       render({ quiet: true });
     };
     $$('[data-phdel]', main).forEach(b => b.onclick = async () => { if (!confirm('Remove this photo?')) return; try { await q(sb.rpc('jt_file_delete', { p_id: +b.dataset.phdel })); render({ quiet: true }); } catch (e) { toast(niceError(e), true); } });
+  }
+};
+
+// ================================================================ HSE DAILY REPORT (3.0.11)
+// Filled each day for each well by the HSE person on the crew, laid out like GANKCO's own HSE Daily Report. It fills the HSE part of that
+// day's Daily Operation Report (weather, POB, man-hours, TRI, LTI and the HSE comment) as soon as it's saved.
+const JT_INC = [['ua', 'Unsafe acts (UA)'], ['uc', 'Unsafe conditions (UC)'], ['nm', 'Near miss (NM)'], ['fac', 'First aid cases (FAC)'], ['mtc', 'Medical treatment cases (MTC)'],
+  ['lti', 'Lost time injury (LTI)'], ['fc', 'Fatality cases (FC)'], ['si', 'Security incident (SI)'], ['cd', 'Community disturbance (CD)'], ['other', 'Others (fire)']];
+const JT_ACT = [['tbt', 'Toolbox talk'], ['meeting', 'HSE meeting / kick-off meeting'], ['drill', 'Emergency drill'], ['inspection', 'Safety inspection'], ['audit', 'Safety audit'], ['induction', 'Safety induction']];
+const JT_HSE_NONE = 'No incident / accident';
+const JT_WX = ['Calm and Cloudy', 'Sunny', 'Calm and Sunny', 'Cloudy', 'Rainy', 'Light rain', 'Heavy rain', 'Windy', 'Stormy'];
+// POB as text: "HEOSL (Client) 5 · GANKCO 10 · Crane 2 = 17"
+function jtPobText(pob, j, r) {
+  const l = typeof jtDorPob === 'function' ? jtDorPob({ ...(r || {}), pob: pob || {} }, j) : null;
+  if (!l) return r && (r.pob_client != null || r.pob_gankco != null || r.pob_others != null) ? `Client ${r.pob_client ?? '—'} · GANKCO ${r.pob_gankco ?? '—'} · others ${r.pob_others ?? '—'}` : '—';
+  return l.map(([k, v]) => `${k.toLowerCase() === 'client' ? jtPobLabel('Client', j) : k} ${v}`).join(' · ') + ` = ${l.reduce((a, [, v]) => a + v, 0)}`;
+}
+// a new HSE report with no signal: built from the job as it was last loaded
+function jtHseOffline(j, wellId, date) {
+  const L = j.hse_last || {}; const w = j.wells.find(x => x.id === wellId) || j.wells[j.wells.length - 1] || {};
+  const dor = j.reports.find(r => r.well_id === w.id && r.report_date === date);
+  return { id: null, job_id: j.id, well_id: w.id, report_date: date, status: 'draft', client_reps: dor?.client_reps || L.client_reps || j.client_reps || '', gankco_rep: dor?.gankco_rep || L.gankco_rep || j.lead_name || '',
+    client_hse_rep: L.client_hse_rep || '', gankco_hse_rep: j.crew.find(c => c.is_hse)?.name || L.gankco_hse_rep || '', weather: L.weather || '', pob: L.pob || {}, incidents: {}, activities: {}, hazards: [],
+    report_no: (j.hse || []).filter(h => h.well_id === w.id && h.report_date < date).length + 1, prior: j.hse_totals || {}, well: w.name, well_field: w.field || j.field,
+    job: { id: j.id, job_no: j.job_no, project: j.project, job_type: j.job_type, field: j.field, status: j.status, lead_id: j.lead_id, pob_cats: j.pob_cats, client: j.client },
+    wells: j.wells.map(x => ({ id: x.id, name: x.name })), dor: dor ? { id: dor.id, status: dor.status } : null, hse_id: j.hse_id, hse_name: j.crew.find(c => c.is_hse)?.name || '',
+    who: j.hse_who, shift_hours: 12, can_edit: !!j.hse_who, can_review: false, offline: true };
+}
+
+const jtHse = {
+  async load(parts, params) {
+    this.key = null; this.h = null;
+    if (parts[2] === 'new') {
+      const jobId = +params?.get('job');
+      if (!jobId) return this.picker();
+      const wellId = +params.get('well') || null, date = params.get('date') || localISO(0);
+      let h;
+      try { if (!navigator.onLine) throw new Error('Failed to fetch'); h = await q(sb.rpc('jt_hse_get', { p_id: null, p_job: jobId, p_well: wellId, p_date: date })); }
+      catch (e) { if (!jtNetErr(e)) throw e; const c = jtCacheGet('job.' + jobId); if (!c) throw new Error('There’s no signal, and this job hasn’t been opened on this phone before. Try again when you’re back online.'); h = jtHseOffline(c.v, wellId, date); jtOfflineNote(c.at); }
+      if (h.id) { setTimeout(() => go('#/jt/hse/' + h.id), 0); return '<div class="loading">Opening…</div>'; }
+      if (!h.who) return topbar('New HSE report') + `<div class="notice">The HSE report for ${esc(h.job.job_no)} is filled by ${esc(h.hse_name || 'the HSE person on the crew')}, the lead engineer or an operations manager.</div><a class="btn" href="#/jt/job/${h.job.id}?t=hse">Open the job</a>`;
+      this.h = h; this.key = `nest.jt.hse.new.${h.job.id}`;
+    } else {
+      const id = +parts[2];
+      this.h = await jtCached('hse.' + id, () => q(sb.rpc('jt_hse_get', { p_id: id })));
+      this.key = `nest.jt.hse.${id}`;
+    }
+    const local = (() => { try { return JSON.parse(localStorage.getItem(this.key) || 'null'); } catch (e) { return null; } })();
+    this.local = local && (!this.h.updated_at || local.at > new Date(this.h.updated_at).getTime()) && (this.h.id || (local.data.well_id === this.h.well_id && local.data.report_date === this.h.report_date)) ? local : null;
+    return this.h.can_edit && !S.viewAs ? this.form() : this.view();
   },
-  bindHse(main, keep) {
-    const undo = $('#jt-hseundo', main); if (undo) undo.onclick = () => { this.behalf = false; $('#jt-hsebox', main).outerHTML = this.hseSection(this.r);
-      const again = $('#jt-hsemine', main); if (again) again.onclick = () => { this.behalf = true; $('#jt-hsebox', main).outerHTML = this.hseSection(this.r.hse_at ? this.r : { ...this.r, man_hours: this.r.man_hours ?? '', hse_comment: this.r.hse_comment || 'No incident / accident' }); this.bindHse(main, keep); keep(); };
-      const rem = $('#jt-hserem', main); if (rem) rem.onclick = async () => { try { const who = await q(sb.rpc('jt_hse_remind', { p_id: this.r.id })); toast(`${who} has been reminded`); rem.disabled = true; } catch (e) { toast(niceError(e), true); } };
-      keep(); };
+  // which job? (from the menu)
+  async picker() {
+    const o = await jtCached('overview', () => q(sb.rpc('jt_overview')));
+    const jobs = o.jobs.filter(j => j.status !== 'closed' && (j.mine || jtAdmin()));
+    return topbar('New HSE report', 'Choose the job.') + (jobs.length ? `<section class="panel"><ul class="list">${jobs.map(j => `<li><a class="main" href="#/jt/hse/new?job=${j.id}">
+        <div class="name">${esc(j.job_no)} ${jtChip(JT_STATUS, j.status)}</div><div class="sub">${esc([j.client, j.project, j.field].filter(Boolean).join(' · '))}</div></a></li>`).join('')}</ul></section>`
+      : '<div class="notice">You’re not on any open job. An operations manager adds you to a job’s crew and ticks you as its HSE person.</div>');
+  },
+  head() {
+    const h = this.h, j = h.job;
+    return `<div class="jt-rhead"><div><div class="jt-rjob">${esc(j.job_no)} · ${esc(j.client?.short_name || j.client?.name || '')}</div>
+      <div class="jt-rmeta">HSE Daily Report ${h.report_no ?? ''} · ${h.id ? jtChip(JT_RSTATUS, h.status) : chip('muted', 'New')}${h.filled_by_name ? ` <span class="sub">by ${esc(h.filled_by_name)}${h.on_behalf ? ` for ${esc(h.hse_name || 'HSE')}` : ''}</span>` : ''}${h.submitted_by_name ? ` <span class="sub">· sent ${fdt(h.submitted_at)}</span>` : ''}${h.reviewed_by_name ? ` <span class="sub">· reviewed by ${esc(h.reviewed_by_name)}</span>` : ''}</div></div>
+      ${h.dor ? `<a class="btn small" href="#/jt/report/${h.dor.id}">${ico('derrick')}Daily report</a>` : ''}</div>`;
+  },
+  cats() { return this.h.job.pob_cats?.length ? this.h.job.pob_cats : Object.keys(this.h.pob || {}); },
+  hzRow(x = {}) {
+    return `<div class="jt-hz"><textarea class="jt-hzd" rows="2" placeholder="What was seen (e.g. a personnel running on site)">${esc(x.desc || '')}</textarea>
+      <div class="seg jt-hzt">${['UA', 'UC'].map(t => `<button type="button" data-v="${t}" class="${(x.type || '') === t ? 'on' : ''}" title="${t === 'UA' ? 'Unsafe act' : 'Unsafe condition'}">${t}</button>`).join('')}</div>
+      <textarea class="jt-hza" rows="2" placeholder="Immediate action taken">${esc(x.action || '')}</textarea>
+      <button type="button" class="btn small" data-hzrm title="Remove">${ico('trash')}</button></div>`;
+  },
+  form() {
+    const h = this.h, j = h.job, v = this.local ? { ...h, ...this.local.data } : h;
+    const P = h.prior || {}, pi = P.incidents || {}, pa = P.activities || {};
+    const wait = jtOutbox().find(x => x.key === this.key);
+    return topbar(h.id ? `HSE report · ${esc(h.well || '')}` : 'New HSE report', jtDay(v.report_date), `<a class="btn" href="#/jt/job/${j.id}?t=hse">Back to job</a>`) + this.head() +
+      `${h.who === 'behalf' ? `<div class="notice">You’re filling this for ${esc(h.hse_name || 'the HSE person')}. Nest records that you did.</div>` : ''}
+      ${this.local ? `<div class="notice">This phone has changes that weren’t saved (${fdt(this.local.at)}). They’re shown below. <button type="button" class="btn small" id="hs-discard">Discard them</button></div>` : ''}
+      ${h.status === 'returned' && h.return_note ? `<div class="notice bad"><b>Sent back:</b> ${esc(h.return_note)}</div>` : ''}
+      ${!wait ? '' : wait.error ? `<div class="notice bad">This report was saved on the phone but couldn’t be sent: ${esc(wait.error)} Fix it and press Save again.</div>` : `<div class="notice jt-wait">${ico('clock')} Waiting for signal: this report is saved on the phone and will be sent by itself.</div>`}
+      <form id="hs-form" class="jt-dor" novalidate>
+      <section class="panel"><header><h2>Well and date</h2></header><div class="body">
+        <div class="row2"><label class="f">Well<select name="well_id" required>${(h.wells || []).map(w => opt(w.id, w.name, v.well_id)).join('')}</select></label>
+        <label class="f">Date<input type="date" name="report_date" value="${esc(v.report_date)}" max="${localISO(1)}" required></label></div></div></section>
+      <section class="panel"><header><h2>People</h2></header><div class="body">
+        <div class="row2"><label class="f">Client rep(s)<input name="client_reps" value="${esc(v.client_reps || '')}"></label><label class="f">GANKCO rep<input name="gankco_rep" value="${esc(v.gankco_rep || '')}"></label></div>
+        <div class="row2"><label class="f">Client HSE rep<input name="client_hse_rep" value="${esc(v.client_hse_rep || '')}"></label><label class="f">GANKCO HSE rep<input name="gankco_hse_rep" value="${esc(v.gankco_hse_rep || '')}"></label></div></div></section>
+      <section class="panel"><header><h2>Weather condition</h2><span class="meta">Also on the daily report and the WhatsApp update</span></header><div class="body">
+        <input name="weather" value="${esc(v.weather || '')}" placeholder="Calm and Cloudy" list="hs-wx"><datalist id="hs-wx">${JT_WX.map(x => `<option value="${x}">`).join('')}</datalist></div></section>
+      <section class="panel"><header><h2>General information and man-hours</h2><span class="meta" id="hs-mh"></span></header><div class="body">
+        <div class="jt-pobgrid">${this.cats().map(c => `<label class="f">${esc(jtPobLabel(c, j))}<input type="number" min="0" step="1" inputmode="numeric" data-pob="${esc(c)}" value="${esc((v.pob || {})[c] ?? '')}"></label>`).join('')}</div>
+        <div class="jt-facts mt"><div><span>Total POB</span><b id="hs-tot">0</b></div><div><span>Man-hours (POB × ${h.shift_hours || 12})</span><b id="hs-hrs">0</b></div><div><span>Cumulative man-hours</span><b id="hs-cum">0</b></div></div>
+        <label class="f mt">Topic discussed at the toolbox talk<input name="tbt_topic" value="${esc(v.tbt_topic || '')}" placeholder="Site safety during mobilisation and spotting"></label>
+        <label class="f">Task<textarea name="task" rows="3" placeholder="What the crew did today, e.g. Kick-off meeting; medicals; permit raised and signed">${esc(v.task || '')}</textarea></label></div></section>
+      <section class="panel"><header><h2>Hazards identification</h2><span class="meta" id="hs-hzc"></span></header><div class="body">
+        <p class="muted small">Each unsafe act (UA) or unsafe condition (UC) seen today, and what was done about it. The UA and UC counts below come from this list.</p>
+        <div id="hs-hz">${(v.hazards || []).map(x => this.hzRow(x)).join('')}</div>
+        <button type="button" class="btn small" id="hs-hzadd">${ico('plus')}Add a hazard</button></div></section>
+      <section class="panel"><header><h2>HSE statistics</h2><span class="meta">Today and cumulative (the whole job)</span></header>
+        <div class="tablewrap"><table class="t jt-hst"><thead><tr><th>Daily incident status</th><th class="num">Today</th><th class="num">Cumulative</th></tr></thead><tbody>
+        ${JT_INC.map(([k, l]) => `<tr><td>${esc(l)}</td><td class="num">${['ua', 'uc'].includes(k) ? `<b data-auto="${k}">0</b>` : `<input type="number" min="0" step="1" inputmode="numeric" data-inc="${k}" value="${esc((v.incidents || {})[k] || 0)}">`}</td><td class="num" data-cum="${k}" data-prior="${+pi[k] || 0}"></td></tr>`).join('')}</tbody></table></div></section>
+      <section class="panel"><header><h2>Activities</h2><span class="meta">Today and cumulative</span></header>
+        <div class="tablewrap"><table class="t jt-hst"><thead><tr><th>Activity type</th><th class="num">Today</th><th class="num">Cumulative</th></tr></thead><tbody>
+        ${JT_ACT.map(([k, l]) => `<tr><td>${esc(l)}</td><td class="num"><input type="number" min="0" step="1" inputmode="numeric" data-act="${k}" value="${esc((v.activities || {})[k] || 0)}"></td><td class="num" data-acum="${k}" data-prior="${+pa[k] || 0}"></td></tr>`).join('')}</tbody></table></div></section>
+      <section class="panel"><header><h2>Safety inspection</h2></header><div class="body">
+        <textarea name="inspection" rows="4" placeholder="Who inspected what, what was found, and any observations">${esc(v.inspection || '')}</textarea></div></section>
+      <section class="panel"><header><h2>HSE comment for the daily report</h2></header><div class="body">
+        <input name="hse_comment" value="${esc(v.hse_comment || '')}" placeholder="${JT_HSE_NONE}">
+        <p class="muted small" id="hs-comnote"></p></div></section>
+      </form>
+      <div class="jt-actbar">
+        ${h.can_review ? `<button class="btn" id="hs-back">${ico('undo')}Send back</button><button class="btn primary" id="hs-ok">${ico('check')}Mark reviewed</button>` : ''}
+        ${h.id ? `<button class="btn" id="hs-pdf">${ico('pdf')}PDF</button><button class="btn" id="hs-xl">${ico('down')}Excel</button>` : ''}
+        ${h.id && (jtAdmin() || ['draft', 'returned'].includes(h.status)) ? `<button class="btn danger" id="hs-del">${ico('trash')}</button>` : ''}
+        <span class="jt-sp"></span>
+        <button class="btn" id="hs-save">${ico('check')}Save</button>${['draft', 'returned'].includes(h.status || 'draft') ? `<button class="btn tagbtn" id="hs-send">${ico('send')}Save and send</button>` : ''}</div>`;
+  },
+  view() {
+    const h = this.h, j = h.job, P = h.prior || {}, pi = P.incidents || {}, pa = P.activities || {}, inc = h.incidents || {}, act = h.activities || {};
+    const tot = this.cats().reduce((a, c) => a + (+(h.pob || {})[c] || 0), 0);
+    return topbar(`HSE report · ${esc(h.well || '')}`, jtDay(h.report_date), `<a class="btn" href="#/jt/job/${j.id}?t=hse">Back to job</a>`) + this.head() +
+      `${h.status === 'returned' && h.return_note ? `<div class="notice bad"><b>Sent back:</b> ${esc(h.return_note)}</div>` : ''}
+      <section class="panel"><div class="body jt-facts">
+        <div><span>Client</span><b>${esc(j.client?.name || '')}</b></div><div><span>Client rep(s)</span><b>${esc(h.client_reps || '—')}</b></div><div><span>GANKCO rep</span><b>${esc(h.gankco_rep || '—')}</b></div>
+        <div><span>Client HSE rep</span><b>${esc(h.client_hse_rep || '—')}</b></div><div><span>GANKCO HSE rep</span><b>${esc(h.gankco_hse_rep || '—')}</b></div><div><span>Field · well</span><b>${esc([h.well_field, h.well].filter(Boolean).join(' · '))}</b></div>
+        <div><span>Weather</span><b>${esc(h.weather || '—')}</b></div><div><span>POB</span><b>${esc(jtPobText(h.pob, j))}</b></div>
+        <div><span>Man-hours</span><b>${jtNum(h.man_hours) || 0} <span class="sub">(${jtNum((+P.man_hours || 0) + (+h.man_hours || 0))} on the job)</span></b></div>
+        <div><span>HSE comment</span><b>${esc(h.hse_comment || '—')}</b></div></div></section>
+      <section class="panel"><header><h2>Toolbox talk and tasks</h2></header><div class="body"><p><b>Toolbox talk:</b> ${esc(h.tbt_topic || '—')}</p><p class="jt-pre"><b>Task:</b> ${esc(h.task || '—')}</p></div></section>
+      <section class="panel"><header><h2>Hazards identification</h2><span class="meta">${plural((h.hazards || []).length, 'hazard')}</span></header>
+        ${(h.hazards || []).length ? `<div class="tablewrap"><table class="t"><thead><tr><th>Unsafe act or condition</th><th>Type</th><th>Immediate action taken</th></tr></thead><tbody>
+          ${h.hazards.map(x => `<tr><td class="jt-pre">${esc(x.desc)}</td><td>${chip(x.type === 'UA' ? 'pending' : 'out', x.type)}</td><td class="jt-pre">${esc(x.action || '—')}</td></tr>`).join('')}</tbody></table></div>` : '<div class="empty">None recorded.</div>'}</section>
+      <section class="panel"><header><h2>HSE statistics and activities</h2><span class="meta">Today · cumulative</span></header>
+        <div class="tablewrap"><table class="t jt-hst"><tbody>${JT_INC.map(([k, l]) => `<tr><td>${esc(l)}</td><td class="num">${+inc[k] || 0}</td><td class="num">${(+pi[k] || 0) + (+inc[k] || 0)}</td></tr>`).join('')}
+          <tr class="jt-secrow"><td colspan="3">Activities</td></tr>${JT_ACT.map(([k, l]) => `<tr><td>${esc(l)}</td><td class="num">${+act[k] || 0}</td><td class="num">${(+pa[k] || 0) + (+act[k] || 0)}</td></tr>`).join('')}</tbody></table></div></section>
+      ${h.inspection ? `<section class="panel"><header><h2>Safety inspection</h2></header><div class="body jt-pre">${esc(h.inspection)}</div></section>` : ''}
+      <div class="jt-actbar">${h.can_review ? `<button class="btn" id="hs-back">${ico('undo')}Send back</button><button class="btn primary" id="hs-ok">${ico('check')}Mark reviewed</button>` : ''}
+        <button class="btn" id="hs-pdf">${ico('pdf')}PDF</button><button class="btn" id="hs-xl">${ico('down')}Excel</button></div>`;
+  },
+  // the report as typed
+  collect(main) {
+    const f = $('#hs-form', main); const x = Object.fromEntries(new FormData(f).entries());
+    const pob = {}; $$('[data-pob]', main).forEach(i => { if (i.value !== '') pob[i.dataset.pob] = +i.value; });
+    const incidents = {}; $$('[data-inc]', main).forEach(i => { incidents[i.dataset.inc] = +i.value || 0; });
+    const activities = {}; $$('[data-act]', main).forEach(i => { activities[i.dataset.act] = +i.value || 0; });
+    const hazards = $$('.jt-hz', main).map(r => ({ desc: $('.jt-hzd', r).value.trim(), type: $('.jt-hzt button.on', r)?.dataset.v || '', action: $('.jt-hza', r).value.trim() })).filter(x2 => x2.desc || x2.action);
+    return { id: this.h.id, job_id: this.h.job.id, well_id: +x.well_id || null, report_date: x.report_date, client_reps: x.client_reps, gankco_rep: x.gankco_rep, client_hse_rep: x.client_hse_rep,
+      gankco_hse_rep: x.gankco_hse_rep, weather: x.weather, pob, tbt_topic: x.tbt_topic, task: x.task, incidents, activities, hazards, inspection: x.inspection, hse_comment: x.hse_comment };
+  },
+  bind(main) {
+    const h = this.h; if (!h) return;
+    const docs = async kind => { try { const n = await withProgress(kind === 'pdf' ? 'Making the PDF…' : 'Making the Excel file…', () => kind === 'pdf' ? jtHsePdfMany(h.job, [h.id]) : jtHseWorkbook(h.job, [h.id])); jtLogOne(h.job.id, n); } catch (e) { toast(niceError(e), true); } };
+    const pdf = $('#hs-pdf', main); if (pdf) pdf.onclick = () => docs('pdf');
+    const xl = $('#hs-xl', main); if (xl) xl.onclick = () => docs('xlsx');
+    const ok = $('#hs-ok', main); if (ok) ok.onclick = async () => { try { await q(sb.rpc('jt_hse_review', { p_id: h.id, p_ok: true, p_note: null })); toast('Reviewed'); render({ quiet: true }); } catch (e) { toast(niceError(e), true); } };
+    const bk = $('#hs-back', main); if (bk) bk.onclick = () => modal({ title: 'Send this HSE report back', submit: 'Send back', body: '<label class="f">What needs changing?<textarea name="note" rows="3" required></textarea></label>',
+      onSubmit: async x => { await q(sb.rpc('jt_hse_review', { p_id: h.id, p_ok: false, p_note: x.note })); toast('Sent back'); render({ quiet: true }); } });
+    const form = $('#hs-form', main); if (!form) return;
+    const keep = debounce(() => { try { localStorage.setItem(this.key, JSON.stringify({ at: Date.now(), data: this.collect(main) })); } catch (e) { } }, 600);
+    const com = $('[name=hse_comment]', main);
+    com.dataset.auto = !com.value.trim() || com.value.trim() === JT_HSE_NONE ? '1' : '';
+    com.addEventListener('input', () => { com.dataset.auto = com.value.trim() ? '' : '1'; });
+    // totals, cumulatives and the HSE comment follow what's typed
+    const sums = () => {
+      const tot = $$('[data-pob]', main).reduce((a, i) => a + (+i.value || 0), 0), hrs = tot * (h.shift_hours || 12);
+      $('#hs-tot', main).textContent = tot; $('#hs-hrs', main).textContent = jtNum(hrs) || 0; $('#hs-cum', main).textContent = jtNum((+h.prior?.man_hours || 0) + hrs) || 0;
+      $('#hs-mh', main).textContent = tot ? `${tot} on board · ${jtNum(hrs)} man-hours` : '';
+      const hz = $$('.jt-hz', main).map(r => $('.jt-hzt button.on', r)?.dataset.v);
+      const n = { ua: hz.filter(t => t === 'UA').length, uc: hz.filter(t => t === 'UC').length };
+      $$('[data-auto]', main).forEach(b => { b.textContent = n[b.dataset.auto]; });
+      $('#hs-hzc', main).textContent = hz.length ? `${n.ua} UA · ${n.uc} UC` : '';
+      $$('[data-cum]', main).forEach(td => { const k = td.dataset.cum; const today = ['ua', 'uc'].includes(k) ? n[k] : (+$(`[data-inc="${k}"]`, main)?.value || 0); td.textContent = +td.dataset.prior + today; });
+      $$('[data-acum]', main).forEach(td => { td.textContent = +td.dataset.prior + (+$(`[data-act="${td.dataset.acum}"]`, main)?.value || 0); });
+      const any = $$('[data-inc]', main).some(i => +i.value > 0);
+      if (com.dataset.auto === '1') com.value = any ? '' : JT_HSE_NONE;
+      $('#hs-comnote', main).textContent = any ? 'Something happened today: say what in a few words. It goes on the daily report.' : 'Nothing happened today, so the daily report says “No incident / accident”. Change it if you need to.';
+    };
+    const wireHz = () => $$('.jt-hz', main).forEach(r => {
+      $$('.jt-hzt button', r).forEach(b => b.onclick = () => { $$('.jt-hzt button', r).forEach(x => x.classList.toggle('on', x === b)); sums(); keep(); });
+      $('[data-hzrm]', r).onclick = () => { r.remove(); sums(); keep(); };
+      $$('textarea', r).forEach(t => { const g = () => { t.style.height = 'auto'; t.style.height = t.scrollHeight + 'px'; }; t.oninput = g; g(); });
+    });
+    $('#hs-hzadd', main).onclick = () => { $('#hs-hz', main).insertAdjacentHTML('beforeend', this.hzRow()); wireHz(); $$('.jt-hzd', main).pop().focus(); keep(); };
+    wireHz(); sums();
+    form.addEventListener('input', () => { sums(); keep(); }); form.addEventListener('change', keep);
+    const dis = $('#hs-discard', main); if (dis) dis.onclick = () => { try { localStorage.removeItem(this.key); } catch (e) { } render({ quiet: true }); };
+    // a new report moved to another well or day: that day may already have one, and the totals before it change
+    if (!h.id) ['well_id', 'report_date'].forEach(n => $(`[name=${n}]`, main).addEventListener('change', async () => {
+      const p = this.collect(main); if (!p.well_id || !p.report_date || h.offline) return;
+      try { const x = await q(sb.rpc('jt_hse_get', { p_id: null, p_job: h.job.id, p_well: p.well_id, p_date: p.report_date }));
+        if (x.id) { if (confirm(`There is already an HSE report for ${x.well} on ${fd(x.report_date)}. Open it?`)) go('#/jt/hse/' + x.id); return; }
+        h.prior = x.prior; h.report_no = x.report_no; $$('[data-cum]', main).forEach(td => td.dataset.prior = +(x.prior?.incidents || {})[td.dataset.cum] || 0);
+        $$('[data-acum]', main).forEach(td => td.dataset.prior = +(x.prior?.activities || {})[td.dataset.acum] || 0); sums();
+      } catch (e) { }
+    }));
+    const save = async submit => {
+      const p = this.collect(main);
+      if (!p.well_id) return toast('Choose the well.', true);
+      if (p.hazards.some(x => !x.desc)) return toast('Describe each hazard (or remove the empty one).', true);
+      if (p.hazards.some(x => !x.type)) return toast('Mark each hazard UA (unsafe act) or UC (unsafe condition).', true);
+      if ($$('[data-inc]', main).some(i => +i.value > 0) && !String(p.hse_comment || '').trim()) return toast('Say in the HSE comment what happened today.', true);
+      if (submit) {
+        if (!Object.values(p.pob).some(n => n > 0)) return toast('Enter the POB (personnel on board) first.', true);
+        if (!String(p.task || '').trim()) return toast('Say what tasks were carried out today.', true);
+      }
+      try {
+        const id = await q(sb.rpc('jt_hse_save', { p }));
+        if (submit) await q(sb.rpc('jt_hse_submit', { p_id: id }));
+        try { localStorage.removeItem(this.key); } catch (e) { } jtOutboxSet(jtOutbox().filter(x => x.key !== this.key));
+        toast(submit ? 'HSE report sent. Its figures are on the daily report.' : 'Saved. The daily report has its HSE figures.');
+        if (!h.id) go('#/jt/hse/' + id); else render({ quiet: true });
+      } catch (e) {
+        if (jtNetErr(e)) {
+          const label = `${(h.wells || []).find(w => w.id === p.well_id)?.name || ''} ${fd(p.report_date)}`;
+          jtOutboxSet([...jtOutbox().filter(x => x.key !== this.key), { kind: 'hse', key: this.key, p, submit, label }]);
+          toast('No signal. The HSE report is saved on this phone and will be sent by itself when you’re back online.');
+          if (!$('#hs-wait', main)) form.insertAdjacentHTML('beforebegin', `<div class="notice jt-wait" id="hs-wait">${ico('clock')} No signal: this report is saved on the phone and will be sent by itself when you’re back online. You can keep working.</div>`);
+        } else toast(niceError(e), true);
+      }
+    };
+    $('#hs-save', main).onclick = () => save(false);
+    const sd = $('#hs-send', main); if (sd) sd.onclick = () => save(true);
+    const del = $('#hs-del', main); if (del) del.onclick = async () => { if (!confirm('Delete this HSE report? The daily report for that day will wait for a new one.')) return;
+      try { await q(sb.rpc('jt_hse_delete', { p_id: h.id })); try { localStorage.removeItem(this.key); } catch (e) { } toast('Deleted'); go(`#/jt/job/${h.job.id}?t=hse`); } catch (e) { toast(niceError(e), true); } };
   }
 };
 
@@ -1098,7 +1410,7 @@ const jtSettingsPage = {
     if (!jtAdmin() && !isSuper()) return topbar('JobTrack settings') + '<div class="notice">Only JobTrack admins change these.</div>';
     const c = S.jt.cfg;
     const yr = new Date().getFullYear();
-    return topbar('JobTrack settings', 'Jobs and their numbers, equipment groups, who approves tickets, and emails.') +
+    return topbar('JobTrack settings', 'Jobs and their numbers, equipment groups, POB categories, who approves tickets, and reminders.') +
       `<form id="jts-jobs"><section class="panel" id="jobs"><header><h2>Jobs</h2><span class="meta">Next: GES-JT-OPR-${String(c.next_job || 1).padStart(4, '0')}-${yr}</span></header><div class="body">
         <div class="row2"><label class="f">Who can start a job<select name="who_starts">${opt('any', 'Any engineer (they lead the job)', c.who_starts || 'any')}${opt('admins', 'Operations managers only (JobTrack admins)', c.who_starts || 'any')}</select>
           <span class="hint">So a job can start when the operations manager isn’t around. Leads manage their job’s crew and ticket items.</span></label>
@@ -1111,6 +1423,11 @@ const jtSettingsPage = {
         <div id="jts-g">${jtGroups().map(g => `<div class="jt-grow"><input name="g" value="${esc(g)}"><button type="button" class="btn small" data-grm>${ico('trash')}</button></div>`).join('')}</div>
         <button type="button" class="btn small" id="jts-gadd">${ico('plus')}Add a group</button>
         <div class="acc-save"><button class="btn primary" type="submit">Save</button></div></div></section></form>
+      <form id="jts-pob"><section class="panel" id="pob"><header><h2>POB categories</h2><span class="meta">${esc((c.pob_cats || []).join(', '))}</span></header><div class="body">
+        <p class="muted">New jobs start with these. The HSE person counts the people on board in each one every day, on the HSE Daily Report and the daily report. A job’s own list can be changed on the job (Wells, crew & items). Up to 7.</p>
+        <div id="jts-p">${(c.pob_cats || []).map(g => `<div class="jt-grow"><input name="p" value="${esc(g)}" maxlength="30"><button type="button" class="btn small" data-prm>${ico('trash')}</button></div>`).join('')}</div>
+        <button type="button" class="btn small" id="jts-padd">${ico('plus')}Add a category</button>
+        <div class="acc-save"><button class="btn primary" type="submit">Save</button></div></div></section></form>
       <form id="jts-appr"><section class="panel" id="approvers"><header><h2>Who approves tickets</h2><span class="meta">${esc((c.approver_names || []).join(', ') || 'Every JobTrack admin')}</span></header><div class="body">
         <p class="muted">Tick the operations managers who approve tickets. Tick nobody and every JobTrack admin can approve. They get an email and a notification when a ticket comes in.</p>
         ${(c.admins || []).length ? (c.admins || []).map(a => `<label class="check"><input type="checkbox" name="a_${a.id}" ${(c.approvers || []).includes(a.id) ? 'checked' : ''}> ${esc(a.name)}</label>`).join('') : '<div class="notice">Nobody has the JobTrack Admin role yet. The Developer sets it on the Team page.</div>'}
@@ -1119,6 +1436,7 @@ const jtSettingsPage = {
         <label class="switch pc-sw"><input type="checkbox" name="emails_on" ${c.emails_on !== false ? 'checked' : ''}><span class="sw"></span><span><b>Email approvers when a ticket is sent</b><span class="sub muted">Only used when Nest notification emails are off (Nest settings). Otherwise approvers get the ticket in their notification email, and on their phone.</span></span></label>
         <label class="switch pc-sw mt"><input type="checkbox" name="reminder_on" ${c.reminder_on ? 'checked' : ''}><span class="sw"></span><span><b>Evening reminder</b><span class="sub muted">A Nest notification to the lead and crew when a job on location has no daily report that day.</span></span></label>
         <label class="f mt">Reminder time<select name="reminder_hour">${[17, 18, 19, 20, 21, 22].map(h => opt(h, `${h}:00`, c.reminder_hour || 19)).join('')}</select></label>
+        <p class="muted small mt">The HSE person on each job on location is reminded at 4pm every day when that day’s HSE report isn’t sent. This is always on.</p>
         <div class="acc-save"><button class="btn primary" type="submit">Save</button></div></div></section></form>`;
   },
   bind(main) {
@@ -1128,6 +1446,9 @@ const jtSettingsPage = {
     wire(); $('#jts-gadd', main).onclick = () => { gbox.insertAdjacentHTML('beforeend', `<div class="jt-grow"><input name="g" placeholder="Group name"><button type="button" class="btn small" data-grm>${ico('trash')}</button></div>`); wire(); };
     const saveIt = async p => { try { await q(sb.rpc('jt_settings_save', { p })); await jtLoad(true); toast('Saved'); render({ quiet: true }); } catch (e) { toast(niceError(e), true); } };
     $('#jts-groups', main).onsubmit = e => { e.preventDefault(); saveIt({ groups: $$('[name=g]', gbox).map(x => x.value.trim()).filter(Boolean) }); };
+    const pbox = $('#jts-p', main); const pwire = () => $$('[data-prm]', pbox).forEach(b => b.onclick = () => b.closest('.jt-grow').remove());
+    pwire(); $('#jts-padd', main).onclick = () => { if ($$('[name=p]', pbox).length >= 7) return toast('Up to 7 categories fit the daily report.', true); pbox.insertAdjacentHTML('beforeend', `<div class="jt-grow"><input name="p" placeholder="Category" maxlength="30"><button type="button" class="btn small" data-prm>${ico('trash')}</button></div>`); pwire(); };
+    $('#jts-pob', main).onsubmit = e => { e.preventDefault(); saveIt({ pob_cats: $$('[name=p]', pbox).map(x => x.value.trim()).filter(Boolean) }); };
     $('#jts-appr', main).onsubmit = e => { e.preventDefault(); saveIt({ approvers: (S.jt.cfg.admins || []).filter(a => $(`[name="a_${a.id}"]`, main)?.checked).map(a => a.id) }); };
     const jf = $('#jts-jobs', main);
     jf.next_no.oninput = () => { const n = Math.max(1, +jf.next_no.value || 1); $('#jts-nprev', main).textContent = `GES-JT-OPR-${String(n).padStart(4, '0')}-${new Date().getFullYear()}`; };

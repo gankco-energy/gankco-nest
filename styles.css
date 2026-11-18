@@ -2067,3 +2067,24 @@ a.rp-bign:hover { color: var(--brand); }
 .np-dev { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 9px 0; border-bottom: 1px solid #EEF0F2; } .np-dev .sub { color: var(--muted); font-size: 12.5px; }
 .launcher .pushcard { max-width: 1036px; width: calc(100% - 32px); margin: 0 auto 16px; color: #1C1D20; box-sizing: border-box; }
 .launcher .pushcard p { color: #4A4D52; }
+
+/* 3.0.11 JobTrack: the HSE Daily Report, POB categories, downloads, offline */
+.jt-pobgrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 0 12px; }
+.jt-pobgrid input { text-align: right; font-variant-numeric: tabular-nums; }
+.jt-hz { display: grid; grid-template-columns: minmax(0, 1.3fr) auto minmax(0, 1fr) auto; gap: 8px; align-items: start; padding: 10px 0; border-bottom: 1px solid #EEF0F2; }
+.jt-hz:first-child { padding-top: 0; } .jt-hz textarea { margin: 0; resize: vertical; min-height: 40px; overflow: hidden; }
+.jt-hzt { display: inline-flex; } .jt-hzt button { min-width: 46px; padding: 9px 8px; } .jt-hzt button.on[data-v="UA"] { background: #B8860B; } .jt-hzt button.on[data-v="UC"] { background: var(--out); }
+#hs-hz:empty::before { content: 'None yet.'; display: block; color: var(--muted); font-size: 14px; padding: 4px 0 10px; }
+.jt-hst td { vertical-align: middle; } .jt-hst td.num { width: 110px; font-variant-numeric: tabular-nums; }
+.jt-hst input { width: 76px; margin: 0; text-align: right; } .jt-hst [data-auto] { display: inline-block; min-width: 76px; padding-right: 10px; }
+.jt-hst [data-cum], .jt-hst [data-acum] { color: var(--muted); }
+.jt-cats { display: flex; flex-wrap: wrap; gap: 6px; }
+.jt-hse .jt-facts { margin-bottom: 4px; }
+.offbar { position: sticky; top: 0; z-index: 60; display: flex; gap: 10px; align-items: center; justify-content: center; flex-wrap: wrap; background: #2B2F33; color: #fff; font-size: 13.5px; padding: 8px 14px; }
+.offbar svg { width: 16px; height: 16px; } .offbar .btn { background: #fff; color: #1E1F22; border-color: #fff; }
+.offbar.back { background: #1F8A5B; }
+@media (max-width: 760px) {
+  .jt-hz { grid-template-columns: 1fr auto; } .jt-hz .jt-hzd { grid-column: 1 / 3; } .jt-hz .jt-hza { grid-column: 1 / 3; grid-row: 3; } .jt-hz .jt-hzt { grid-column: 1; grid-row: 2; } .jt-hz [data-hzrm] { grid-column: 2; grid-row: 2; justify-self: end; }
+  .jt-pobgrid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .jt-hst td.num { width: 84px; } .jt-hst input { width: 64px; }
+}

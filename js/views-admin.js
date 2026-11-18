@@ -242,6 +242,9 @@ const ACCESS_GROUPS = [['ops', 'Eng & Ops', 'Engineering & Operations'], ['qhse'
 const groupDepts = g => S.depts.filter(d => (d.access_group || 'ops') === g).map(d => d.id);
 const accessOf = pid => { const mine = S.members.filter(m => m.profile_id === pid).map(m => m.department_id); return ACCESS_GROUPS.map(a => a[0]).filter(g => groupDepts(g).some(id => mine.includes(id))); };
 const APP_LIST = [['inventory', 'Inventory'], ['jobtrack', 'JobTrack'], ['po', 'Purchase Order'], ['proforma', 'PFI & Quote'], ['people', 'PeopleCore']];
+// 3.0.11: JobTrack access in one choice. Everyone with Nest can view JobTrack unless set to No access.
+const JT_ACCESS = [['admin', 'Admin'], ['engineer', 'Engineer'], ['viewer', 'Viewer (management)'], ['everyone', 'View only'], ['none', 'No access']];
+const jtAccessOf = p => (p.app_roles || {}).jobtrack === 'none' ? 'none' : (p.apps || []).includes('jobtrack') ? ((p.app_roles || {}).jobtrack || 'engineer') : 'everyone';
 const appRolePick = (p, k, name) => APP_ROLES[k] ? `<select class="inline mini" ${name ? `name="${name}"` : `data-approle="${k}" data-pid="${p.id}"`}>${APP_ROLES[k].map(([v, l]) => opt(v, l, (p.app_roles || {})[k] || (k === 'jobtrack' ? 'engineer' : 'staff'))).join('')}</select>` : '';
 ROUTES.team = {
   async load() {
@@ -260,6 +263,7 @@ ROUTES.team = {
     const roleOpts = p => ['pending', 'staff', ...(p.role === 'superadmin' || devs.length < 2 ? ['superadmin'] : []), 'disabled'];
     const appsCell = p => p.role === 'superadmin' ? '<span class="sub">Every app, as admin</span>' : p.role === 'disabled' ? '<span class="sub">—</span>'
       : `<div class="appgrid">${APP_LIST.map(([k, l]) => { const on = (p.apps || []).includes(k);
+          if (k === 'jobtrack') { const lv = jtAccessOf(p); return `<div class="approw ${lv !== 'none' ? 'on' : ''}"><span class="appchk ${lv !== 'none' ? 'on' : ''}">${esc(l)}</span><select class="inline mini" data-jtacc="${p.id}" title="JobTrack access">${JT_ACCESS.map(([v, t]) => opt(v, t, lv)).join('')}</select></div>`; }
           return `<div class="approw ${on ? 'on' : ''}"><label class="appchk ${on ? 'on' : ''}"><input type="checkbox" data-app="${k}" data-pid="${p.id}" ${on ? 'checked' : ''}>${esc(l)}</label>${on ? appRolePick(p, k) : ''}</div>`; }).join('')}</div>`;
     return topbar('Team & access', 'Approve sign-ups, switch apps on or off, set each person’s role in each app, and choose who approves for each service line.') +
       `<div class="notice ok">To add someone, send them this link and ask them to create an account: <b>${esc(location.origin + location.pathname)}</b>. They’ll appear here for you to approve.</div>
@@ -300,9 +304,11 @@ ROUTES.team = {
         <dt>Inventory · Admin</dt><dd>Manages items, stock, locations, labels and Inventory settings in every line. Approves requests, stock changes and counts only for the lines where you’ve made them main or backup admin. Can switch to <b>My view</b> to work as staff do.</dd>
         <dt>Inventory · Staff</dt><dd>Day-to-day work in the teams their access covers (Eng &amp; Ops, QHSE or both): materials requests, returns, receiving, moving, monthly counts and certificates. Quantity corrections go to the line’s admin.</dd>
         <dt>Inventory · Viewer</dt><dd>Sees the Overview, stock, Reports and Sign-offs (with prices) and can add and edit jobs in the Job planner. Can’t raise requests, approve or count.</dd>
-        <dt>JobTrack · Admin</dt><dd>Operations managers. Set up jobs, clients, crew and ticket items; see every job; review daily reports; approve tickets (or the approvers chosen in JobTrack settings); JobTrack settings.</dd>
-        <dt>JobTrack · Engineer</dt><dd>Daily Operation Reports, tickets and reimbursables on the jobs they’re crew on (or lead). Sees only those jobs. Can start a job (and lead it) unless JobTrack settings say only operations managers can. The HSE person on a crew fills the HSE part of each report. No prices anywhere in JobTrack.</dd>
-        <dt>JobTrack · Viewer</dt><dd>Management. Sees every job, report, breakdown and ticket and downloads them. Can’t change anything.</dd>
+        <dt>JobTrack · Admin</dt><dd>Operations managers. Set up jobs, clients, crew and ticket items; review daily reports and HSE reports; approve tickets (or the approvers chosen in JobTrack settings); JobTrack settings.</dd>
+        <dt>JobTrack · Engineer</dt><dd>Daily Operation Reports, tickets and reimbursables on the jobs they’re crew on (or lead). Can start a job (and lead it) unless JobTrack settings say only operations managers can. No prices anywhere in JobTrack.</dd>
+        <dt>JobTrack · Viewer (management)</dt><dd>Sees every job and can download all of a job’s reports at once.</dd>
+        <dt>JobTrack · View only</dt><dd>Everyone else with Nest. Sees every job, report and ticket, and downloads one report at a time. Someone on a job’s crew works on that job whatever their role: the HSE person on board fills the HSE Daily Report.</dd>
+        <dt>JobTrack · No access</dt><dd>JobTrack doesn’t open for them.</dd>
         <dt>JobTrack testing</dt><dd>While JobTrack is in testing (Nest settings → Apps in testing), only its testers can open it.</dd>
         <dt>Purchase Order · Staff</dt><dd>Raises POs with no approval step, and revises, cancels and closes their own. Only you can delete a PO.</dd>
         <dt>Purchase Order · Viewer</dt><dd>Sees the Overview and every PO, and downloads them. Can’t change anything.</dd>
@@ -343,6 +349,11 @@ ROUTES.team = {
       const l = APP_LIST.find(a => a[0] === c.dataset.app)[1];
       try { await q(sb.rpc('set_app_access', { p_user: c.dataset.pid, p_app: c.dataset.app, p_on: c.checked })); toast(c.checked ? `${l} switched on` : `${l} switched off`); await loadLookups(); render({ quiet: true }); }
       catch (e) { c.checked = !c.checked; toast(niceError(e), true); }
+    });
+    $$('[data-jtacc]', main).forEach(s => s.onchange = async () => {
+      const p = S.people[s.dataset.jtacc]; const prev = jtAccessOf(p);
+      try { await q(sb.rpc('set_jobtrack_access', { p_user: p.id, p_level: s.value })); toast(`JobTrack: ${JT_ACCESS.find(a => a[0] === s.value)[1]}`); await loadLookups(); render({ quiet: true }); }
+      catch (e) { s.value = prev; toast(niceError(e), true); }
     });
     $$('[data-approle]', main).forEach(s => s.onchange = async () => {
       const p = S.people[s.dataset.pid]; const k = s.dataset.approle; const prev = (p.app_roles || {})[k] || 'staff';

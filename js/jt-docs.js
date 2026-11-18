@@ -1,4 +1,5 @@
-/* GANKCO Nest 3.0.9 — JobTrack documents: the Daily Operation Report (Excel and a one-page PDF, in GANKCO's own DOR layout from jt-dor.js),
+/* GANKCO Nest 3.0.11 — JobTrack documents: the Daily Operation Report (Excel and a one-page PDF, in GANKCO's own DOR layout from jt-dor.js),
+   the HSE Daily Report (Excel and PDF, in GANKCO's own layout from jt-dhr.js), whole-job downloads of either,
    the unpriced job ticket (PDF and Excel), the reimbursables ticket and the Operations Breakdown. */
 'use strict';
 
@@ -102,8 +103,19 @@ function jtDorModel(r, j) {
   const nl = jtWrap(note, cw * 8 - 6).length, nh = rows[f0 - 1].h + rows[f0].h, nneed = nl * JT_LINE + 3;
   if (nneed > nh) [f0 - 1, f0].forEach(i => rows[i].h = Math.ceil(rows[i].h * nneed / nh * 2) / 2);
   fset('J', 2, num(r.report_no)); fset('H', 3, num(r.report_no)); fset('J', 3, num(r.well_reports ?? r.report_no));
-  fset('A', 4, num(r.pob_client)); fset('B', 4, num(r.pob_gankco)); fset('C', 4, num(r.pob_others));
+  // 3.0.11: POB by category (client and GANKCO first, as on the template), up to 7 across A..G
+  const pob = jtDorPob(r, j);
+  if (pob) pob.slice(0, 7).forEach(([l, v], i) => { fset(JT_ABC[i], 3, l); fset(JT_ABC[i], 4, v); });
+  else { fset('A', 4, num(r.pob_client)); fset('B', 4, num(r.pob_gankco)); fset('C', 4, num(r.pob_others)); }
   return { rows, merges };
+}
+// the day's POB as [label, number] pairs: the client first, then GANKCO, then the job's other categories
+function jtDorPob(r, j) {
+  const p = r.pob || {}; const keys = Object.keys(p); if (!keys.length) return null;
+  const cats = [...(j.pob_cats || r.job?.pob_cats || []), ...keys].filter((c, i, a) => a.findIndex(x => x.toLowerCase() === c.toLowerCase()) === i && keys.some(k => k.toLowerCase() === c.toLowerCase()));
+  const rank = c => c.toLowerCase() === 'client' ? 0 : c.toLowerCase() === 'gankco' ? 1 : 2;
+  const val = c => +p[keys.find(k => k.toLowerCase() === c.toLowerCase())] || 0;
+  return cats.sort((a, b) => rank(a) - rank(b)).map(c => [c.toLowerCase() === 'gankco' ? 'GANKCO' : c.toLowerCase() === 'client' ? 'Client' : c, val(c)]);
 }
 // how a value shows in a cell
 const JT_MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
@@ -158,27 +170,41 @@ function jtDorSheet(wb, name, model, imgs, ids) {
 const jtSheetDate = d => { const x = new Date(d + 'T00:00:00'); return `${x.getDate()}-${x.getMonth() + 1}-${String(x.getFullYear()).slice(2)}`; };
 const jtShortDate = d => { const x = new Date(d + 'T00:00:00'); return `${jtOrd(x.getDate())} ${x.toLocaleDateString('en-GB', { month: 'short' })}`; };
 // all the job's reports, or just the ones given
-async function jtDorWorkbook(j, onlyIds) {
+async function jtDorWorkbook(j, onlyIds, set) {
   await loadScript('vendor/exceljs.min.js');
   const X = window.ExcelJS, wb = new X.Workbook(); wb.creator = S.profile?.full_name || ''; wb.lastModifiedBy = S.profile?.full_name || '';
   const ids = (onlyIds?.length ? j.reports.filter(r => onlyIds.includes(r.id)) : j.reports).slice().sort((a, b) => a.report_date.localeCompare(b.report_date) || a.well.localeCompare(b.well)).map(r => r.id);
   if (!ids.length) return toast('There are no daily reports yet.', true);
-  const full = []; for (const id of ids) full.push(await q(sb.rpc('jt_report_get', { p_id: id })));
+  const full = await jtFetchAll(ids, id => q(sb.rpc('jt_report_get', { p_id: id })), set);
   const imgs = await jtDorImages(j);
   const imgIds = new Map();
   [...imgs.logos, imgs.gk].filter(Boolean).forEach(i => imgIds.set(i, wb.addImage({ base64: i.dataUrl.split(',')[1], extension: /image\/png/.test(i.dataUrl.slice(0, 30)) ? 'png' : 'jpeg' })));
   const perDay = {}; full.forEach(r => { perDay[r.report_date] = (perDay[r.report_date] || 0) + 1; });
   const used = new Set();
   for (const r of full) {
-    let name = safeSheet(jtSheetDate(r.report_date) + (perDay[r.report_date] > 1 ? `(${r.well})` : ''));
+    const draft = ['draft', 'returned'].includes(r.status);
+    let name = safeSheet(jtSheetDate(r.report_date) + (perDay[r.report_date] > 1 ? `(${r.well})` : '') + (draft ? ' DRAFT' : ''));
     let k = 2; while (used.has(name)) name = safeSheet(`${name.slice(0, 26)} ${k++}`); used.add(name);
-    jtDorSheet(wb, name, jtDorModel(r, j), imgs, imgIds);
+    const ws = jtDorSheet(wb, name, jtDorModel(r, j), imgs, imgIds);
+    if (draft) jtXlDraft(ws);
   }
   const buf = await wb.xlsx.writeBuffer();
   const d1 = full[0].report_date, d2 = full[full.length - 1].report_date;
   const label = j.job_type || j.project || j.job_no;
   const fname = full.length === 1 ? `DOR - ${full[0].well} - ${jtShortDate(d1)} ${d1.slice(0, 4)}.xlsx` : `General DOR - ${label} ${jtShortDate(d1)} - ${jtShortDate(d2)} ${d2.slice(0, 4)}.xlsx`;
   saveBlob(new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }), jtFile(fname));
+  return jtFile(fname);
+}
+// fetch each report in turn (with the progress bar)
+async function jtFetchAll(ids, get, set) { const out = []; for (let i = 0; i < ids.length; i++) { if (set && ids.length > 1) set(i, ids.length); out.push(await get(ids[i])); } return out; }
+// a draft: DRAFT on the tab and at the top of every printed page
+function jtXlDraft(ws) { ws.headerFooter = { oddHeader: '&R&"Calibri,Bold"&14&KC00000DRAFT · not sent yet', evenHeader: '&R&"Calibri,Bold"&14&KC00000DRAFT · not sent yet' }; }
+// a draft PDF page: a light DRAFT across the page (drawn first, under the report) and a note at the top
+function jtPdfDraft(doc) {
+  const W = doc.internal.pageSize.getWidth(), H = doc.internal.pageSize.getHeight();
+  doc.setFont('Carlito', 'bold'); doc.setTextColor(250, 214, 214); doc.setFontSize(120);
+  doc.text('DRAFT', W / 2, H / 2, { align: 'center', baseline: 'middle', angle: 35 });
+  doc.setFontSize(11); doc.setTextColor(192, 0, 0); doc.text('DRAFT · not sent yet', W - 36, 26, { align: 'right' }); doc.setTextColor(0, 0, 0);
 }
 
 // ---------------------------------------------------------------- the PDF: the same sheet, fitted on one A4 page (as printed from Excel)
@@ -260,7 +286,23 @@ async function jtDorPdf(r, j, withPhotos) {
   jtDorDraw(doc, jtDorModel(r, j), imgs);
   doc.setProperties({ title: `Daily Operation Report - ${r.well} - ${fd(r.report_date)}`, author: S.profile?.full_name || '' });
   // photos only when asked for, on pages after the report
-  const ph = withPhotos ? (r.photos || []) : [];
+  if (withPhotos) await jtPhotoPages(doc, r);
+  const name = jtFile(`DOR - ${r.well} - ${jtShortDate(r.report_date)} ${String(r.report_date).slice(0, 4)}.pdf`);
+  doc.save(name); return name;
+}
+// many daily reports in one PDF, one page each in date order (drafts marked), photos at the back when asked for
+async function jtDorPdfMany(j, ids, withPhotos, set) {
+  const full = (await jtFetchAll(ids, id => q(sb.rpc('jt_report_get', { p_id: id })), set)).sort((a, b) => a.report_date.localeCompare(b.report_date) || String(a.well).localeCompare(String(b.well)));
+  const doc = await jtDorDoc(); const imgs = await jtDorImages(j);
+  full.forEach((r, i) => { if (i) doc.addPage(); if (['draft', 'returned'].includes(r.status)) jtPdfDraft(doc); jtDorDraw(doc, jtDorModel(r, j), imgs); });
+  if (withPhotos) for (const r of full) await jtPhotoPages(doc, r);
+  const d1 = full[0].report_date, d2 = full[full.length - 1].report_date, label = j.job_type || j.project || j.job_no;
+  doc.setProperties({ title: `Daily Operation Reports - ${j.job_no}`, author: S.profile?.full_name || '' });
+  const name = jtFile(`General DOR - ${label} ${jtShortDate(d1)} - ${jtShortDate(d2)} ${d2.slice(0, 4)}.pdf`);
+  doc.save(name); return name;
+}
+async function jtPhotoPages(doc, r) {
+  const ph = r.photos || [];
   if (ph.length) {
     const rows = await q(sb.from('jt_files').select('id,mime,data,caption').in('id', ph.map(p => p.id)));
     const ims = (await Promise.all(rows.map(f => dataImage(`data:${f.mime};base64,${f.data}`).then(i => ({ ...i, caption: f.caption })).catch(() => null)))).filter(Boolean);
@@ -275,16 +317,200 @@ async function jtDorPdf(r, j, withPhotos) {
       if (col === 1) { y += chh; col = 0; } else col = 1;
     });
   }
-  doc.save(jtFile(`DOR - ${r.well} - ${jtShortDate(r.report_date)} ${String(r.report_date).slice(0, 4)}.pdf`));
 }
 // the PDF button: asks about photos when the report has some
 async function jtDorPdfAsk(id, j) {
   let r; try { r = await q(sb.rpc('jt_report_get', { p_id: id })); } catch (e) { return toast(niceError(e), true); }
-  const go = async ph => { try { await withProgress('Making the PDF…', () => jtDorPdf(r, j, ph)); } catch (e) { toast(niceError(e), true); } };
+  const go = async ph => { try { const n = await withProgress('Making the PDF…', () => jtDorPdf(r, j, ph)); if (typeof jtLogOne === 'function') jtLogOne(j.id, n); } catch (e) { toast(niceError(e), true); } };
   if (!r.photos?.length) return go(false);
   modal({ title: 'PDF of the daily report', submit: null, cancel: 'Close', sub: `The report is one page, like the DOR. This report has ${plural(r.photos.length, 'photo')}.`,
     body: `<div class="actionrow"><button type="button" class="btn primary" id="jt-p1">${ico('pdf')}Report only</button><button type="button" class="btn" id="jt-p2">${ico('pdf')}Report with the photos after it</button></div>`,
     onOpen: d => { $('#jt-p1', d).onclick = () => { d.close(); go(false); }; $('#jt-p2', d).onclick = () => { d.close(); go(true); }; } });
+}
+
+// ================================================================ HSE DAILY REPORT, in GANKCO's own layout (jt-dhr.js)
+// One model of the sheet (rows, cells, merges in each row) is filled from the report. The Excel file writes it as a sheet like the
+// template the HSE team fills; the PDF draws the same sheet across one A4 page (two or more when the hazards run long).
+const JT_HSE_INC = [['ua', 25], ['uc', 26], ['nm', 27], ['fac', 28], ['mtc', 29], ['lti', 30], ['fc', 31], ['si', 32], ['cd', 33], ['other', 34]];
+const JT_HSE_ACT = [['tbt', 37], ['meeting', 38], ['drill', 39], ['inspection', 40], ['audit', 41], ['induction', 42]];
+const JT_DHR_LINE = 14.5;                // points a line of 11 pt Aptos Narrow takes in the template's rows
+const jtHseDate = d => { const x = new Date(d + 'T00:00:00'); return `${jtOrd(x.getDate())} ${x.toLocaleDateString('en-GB', { month: 'long' }).toUpperCase()}, ${x.getFullYear()}`; };
+// "Heritage (HEOSL)" → "HEOSL (Client)", as on the template
+const jtClientTag = j => { const s = j?.client?.short_name || j?.client?.name || 'Client'; const m = /\(([^)]+)\)\s*$/.exec(s); return m ? m[1] : s; };
+const jtPobLabel = (c, j) => String(c).toLowerCase() === 'client' ? `${jtClientTag(j)} (Client)` : c;
+const jtDhrColPt = c => JT_DHR.colPx[c] * JT_PX;
+function jtDhrModel(h) {
+  const D = JT_DHR, j = h.job || {}, rows = [];
+  const num = v => v === null || v === undefined || v === '' || isNaN(+v) ? null : +v;
+  const add = (n, vals = {}) => {
+    const t = D.rows[n - 1]; const row = { h: t.h, c: t.c.map(x => ({ s: x[0], v: x[1] ?? null })), m: t.m.map(a => a.slice()) };
+    Object.entries(vals).forEach(([col, v]) => { row.c['ABCDE'.indexOf(col)].v = v === '' || v === undefined ? null : v; });
+    rows.push(row); return row;
+  };
+  // a text cell that wraps: give its row the height the text needs
+  const fit = (row, col, text, min) => {
+    const span = row.m.find(([a, b]) => col >= a && col <= b) || [col, col];
+    let w = 0; for (let c = span[0]; c <= span[1]; c++) w += jtDhrColPt(c);
+    row.c[col].w = true;
+    const lines = String(text || '').trim() ? jtWrap(text, w - 6, 11).length : 1;
+    row.h = Math.max(min ?? row.h, Math.ceil(lines * JT_DHR_LINE + 4));
+  };
+  const inc = k => +(h.incidents || {})[k] || 0, act = k => +(h.activities || {})[k] || 0;
+  const pinc = k => +(h.prior?.incidents || {})[k] || 0, pact = k => +(h.prior?.activities || {})[k] || 0;
+  add(1); add(2); add(3);
+  add(4, { B: j.client?.name || '', D: h.report_date ? jtHseDate(h.report_date) : '' });
+  add(5, { B: j.project || j.job_type || '', D: j.field || '' });
+  fit(add(6, { B: h.client_reps || '' }), 1, h.client_reps, 19.5);
+  add(7, { B: h.gankco_rep || '', D: h.well_field || '' });
+  add(8, { B: h.client_hse_rep || '', D: h.well || '' });
+  add(9, { B: h.gankco_hse_rep || '', D: num(h.report_no) });
+  add(10); add(11); add(12);
+  const pob = h.pob || {}; const cats = (j.pob_cats || []).length ? j.pob_cats : Object.keys(pob);
+  cats.forEach((c, i) => add(i === 0 ? 13 : 14, { A: jtPobLabel(c, j), B: num(pob[c]) ?? 0 }));
+  const tot = cats.reduce((a, c) => a + (+pob[c] || 0), 0);
+  add(17, { C: tot }); add(18, { C: num(h.man_hours) ?? 0 }); add(19, { C: (+h.prior?.man_hours || 0) + (+h.man_hours || 0) });
+  fit(add(20, { A: 'Weather condition', C: h.weather || '' }), 2, h.weather, 18.5);
+  fit(add(20, { C: h.tbt_topic || '' }), 2, h.tbt_topic, 18.5);
+  fit(add(21, { C: h.task || '' }), 2, h.task, 30);
+  add(22); add(23); add(24);
+  JT_HSE_INC.forEach(([k, n]) => add(n, { C: inc(k), E: pinc(k) + inc(k) }));
+  add(35); add(36);
+  JT_HSE_ACT.forEach(([k, n]) => add(n, { C: act(k), E: pact(k) + act(k) }));
+  add(43); add(44); add(45);
+  const hz = h.hazards || []; const N = Math.max(3, hz.length + 1);
+  for (let i = 0; i < N; i++) {
+    const x = hz[i]; const row = add(i === 0 ? 46 : i === N - 1 ? 54 : 47, x ? { A: x.desc, C: x.type, D: x.action || '' } : {});
+    if (x) { fit(row, 0, x.desc, 30); const keep = row.h; fit(row, 3, x.action, 30); row.h = Math.max(keep, row.h); } else row.h = i === N - 1 ? 18 : 15;
+  }
+  add(55); add(56);
+  const paras = String(h.inspection || '').split(/\n\s*\n|\n/).map(t => t.trim()).filter(Boolean);
+  (paras.length ? paras : ['']).forEach(t => fit(add(57, { A: t }), 0, t, paras.length ? 18 : 30));
+  add(60);
+  return rows;
+}
+async function jtDhrLogo() { return imageB64('brand/dhr-gankco.png').catch(() => imageB64('brand/logo-full.png')); }
+
+// ---------------------------------------------------------------- the Excel sheet
+function jtDhrSheet(wb, name, rows, logoId, onePage) {
+  const D = JT_DHR;
+  const ws = wb.addWorksheet(name, { views: [{ zoomScale: 90 }],
+    pageSetup: { paperSize: 9, orientation: 'portrait', fitToPage: true, fitToWidth: 1, fitToHeight: onePage ? 1 : 0, margins: { ...D.margins } } });
+  D.colW.forEach((w, i) => ws.getColumn(i + 1).width = w);
+  rows.forEach((rr, i) => {
+    const row = ws.getRow(i + 1); row.height = rr.h;
+    rr.c.forEach((cell, c) => {
+      const st = D.styles[cell.s]; const x = row.getCell(c + 1);
+      if (cell.v !== null && cell.v !== undefined) x.value = cell.v;
+      x.font = { name: st.f[0], size: st.f[1], bold: st.f[2] || undefined, italic: st.i || undefined };
+      const b = {}; ['left', 'top', 'right', 'bottom'].forEach((k, n) => { const v = jtXlBorder(st.b[n]); if (v) b[k] = v; }); if (Object.keys(b).length) x.border = b;
+      const al = {}; if (st.h) al.horizontal = st.h; if (st.v) al.vertical = st.v === 'center' ? 'middle' : st.v; if (st.w || cell.w) al.wrapText = true; if (Object.keys(al).length) x.alignment = al;
+      if (st.fill) x.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF' + st.fill } };
+    });
+    rr.m.forEach(([a, b]) => { try { ws.mergeCells(i + 1, a + 1, i + 1, b + 1); } catch (e) { } });
+  });
+  ws.pageSetup.printArea = `A1:E${rows.length}`;
+  const L = D.logo; ws.addImage(logoId, { tl: { nativeCol: L.col, nativeColOff: Math.round(L.colOff * 9525), nativeRow: L.row, nativeRowOff: Math.round(L.rowOff * 9525) }, ext: { width: L.w, height: L.h }, editAs: 'oneCell' });
+  return ws;
+}
+// does the sheet fit on one A4 page at a readable size (like the DOR, about half size)?
+function jtDhrOnePage(rows) {
+  const D = JT_DHR, m = D.margins; const W = D.colPx.reduce((a, b) => a + b, 0) * JT_PX, H = rows.reduce((a, r) => a + r.h, 0);
+  const aw = 595.28 - (m.left + m.right) * 72, ah = 841.89 - (m.top + m.bottom) * 72;
+  return Math.min(1, aw / W, ah / H) >= 0.45;
+}
+async function jtHseWorkbook(job, ids, set) {
+  if (!ids.length) return toast('There are no HSE reports yet.', true);
+  await loadScript('vendor/exceljs.min.js');
+  const wb = new window.ExcelJS.Workbook(); wb.creator = S.profile?.full_name || '';
+  const full = (await jtFetchAll(ids, id => q(sb.rpc('jt_hse_get', { p_id: id })), set)).sort((a, b) => a.report_date.localeCompare(b.report_date) || String(a.well).localeCompare(String(b.well)));
+  const logo = await jtDhrLogo(); const logoId = wb.addImage({ base64: logo.dataUrl.split(',')[1], extension: 'png' });
+  const perDay = {}; full.forEach(h => { perDay[h.report_date] = (perDay[h.report_date] || 0) + 1; });
+  const used = new Set();
+  for (const h of full) {
+    const draft = ['draft', 'returned'].includes(h.status);
+    let name = safeSheet(jtSheetDate(h.report_date) + (perDay[h.report_date] > 1 ? `(${h.well})` : '') + (draft ? ' DRAFT' : ''));
+    let k = 2; while (used.has(name)) name = safeSheet(`${name.slice(0, 26)} ${k++}`); used.add(name);
+    const rows = jtDhrModel(h); const ws = jtDhrSheet(wb, name, rows, logoId, jtDhrOnePage(rows));
+    if (draft) jtXlDraft(ws);
+  }
+  const buf = await wb.xlsx.writeBuffer();
+  const d1 = full[0].report_date, d2 = full[full.length - 1].report_date, label = job?.job_type || job?.project || full[0].job?.job_type || full[0].job?.job_no || '';
+  const fname = jtFile(full.length === 1 ? `HSE Daily Report - ${full[0].well} - ${jtShortDate(d1)} ${d1.slice(0, 4)}.xlsx` : `HSE Daily Reports - ${label} ${jtShortDate(d1)} - ${jtShortDate(d2)} ${d2.slice(0, 4)}.xlsx`);
+  saveBlob(new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }), fname);
+  return fname;
+}
+
+// ---------------------------------------------------------------- the PDF: the same sheet, one page when it fits at about half size, otherwise over more pages
+function jtDhrDraw(doc, rows, logo, draft) {
+  const D = JT_DHR, PW = doc.internal.pageSize.getWidth(), PH = doc.internal.pageSize.getHeight();
+  const m = { l: D.margins.left * 72, r: D.margins.right * 72, t: D.margins.top * 72, b: D.margins.bottom * 72 };
+  const cx = [0]; D.colPx.forEach(p => cx.push(cx[cx.length - 1] + p * JT_PX));
+  const W = cx[cx.length - 1], H = rows.reduce((a, r) => a + r.h, 0), aw = PW - m.l - m.r, ah = PH - m.t - m.b;
+  const kOne = Math.min(1, aw / W, ah / H);
+  const k = kOne >= 0.45 ? kOne : Math.max(0.45, Math.min(aw / W, 2 * ah / H * 0.97));
+  // pages: rows go on until the page is full (a row never splits)
+  const pages = [[]]; let used = 0;
+  rows.forEach((r, i) => { if (used + r.h * k > ah + 0.1 && pages[pages.length - 1].length) { pages.push([]); used = 0; } pages[pages.length - 1].push(i); used += r.h * k; });
+  const span = (r, c) => rows[r].m.find(([a, b]) => c >= a && c <= b);
+  const same = (r, c, c2) => { const a = span(r, c); return !!a && a === span(r, c2); };
+  const BW = { dashed: 1, hair: 1, thin: 2, medium: 3, thick: 4, double: 4 };
+  pages.forEach((list, pi) => {
+    if (pi) doc.addPage();
+    if (draft) jtPdfDraft(doc);
+    const ys = {}; let y = m.t; list.forEach(r => { ys[r] = y; y += rows[r].h * k; });
+    const X = c => m.l + cx[c] * k, Y1 = r => ys[r], Y2 = r => ys[r] + rows[r].h * k;
+    // fills
+    list.forEach(r => rows[r].c.forEach((cell, c) => { const f = D.styles[cell.s].fill; if (!f) return; const sp = span(r, c) || [c, c]; if (sp[0] !== c) return;
+      doc.setFillColor(parseInt(f.slice(0, 2), 16), parseInt(f.slice(2, 4), 16), parseInt(f.slice(4, 6), 16)); doc.rect(X(sp[0]), Y1(r), X(sp[1] + 1) - X(sp[0]), Y2(r) - Y1(r), 'F'); }));
+    // borders (the strongest drawn last)
+    const segs = [];
+    list.forEach((r, n) => rows[r].c.forEach((cell, c) => {
+      const b = D.styles[cell.s].b;
+      if (b[0] && !same(r, c, c - 1)) segs.push([b[0], X(c), Y1(r), X(c), Y2(r)]);
+      if (b[2] && !same(r, c, c + 1)) segs.push([b[2], X(c + 1), Y1(r), X(c + 1), Y2(r)]);
+      if (b[1]) segs.push([b[1], X(c), Y1(r), X(c + 1), Y1(r)]);
+      if (b[3]) segs.push([b[3], X(c), Y2(r), X(c + 1), Y2(r)]);
+    }));
+    segs.sort((a, b) => (BW[a[0]] || 0) - (BW[b[0]] || 0));
+    doc.setDrawColor(0, 0, 0); doc.setLineCap('butt');
+    segs.forEach(([s, x1, y1, x2, y2]) => { doc.setLineWidth((s === 'medium' ? 1.5 : s === 'thick' ? 2.2 : 0.75) * k); doc.setLineDashPattern(s === 'dashed' ? [2.4 * k, 0.9 * k] : [], 0); doc.line(x1, y1, x2, y2); });
+    doc.setLineDashPattern([], 0);
+    // text
+    const pad = 2.6 * k;
+    list.forEach(r => rows[r].c.forEach((cell, c) => {
+      if (cell.v === null || cell.v === undefined || cell.v === '') return;
+      const st = D.styles[cell.s]; const sp = span(r, c); if (sp && sp[0] !== c) return;
+      let [c1, c2] = sp || [c, c];
+      const txt = typeof cell.v === 'number' ? String(Math.round(cell.v * 100) / 100) : jtTxt(String(cell.v)); if (!txt) return;
+      const size = st.f[1] * k, bold = st.f[2], wrap = st.w || cell.w;
+      doc.setFont('Carlito', bold ? 'bold' : 'normal'); doc.setFontSize(size); doc.setTextColor(0, 0, 0);
+      const h = st.h || (typeof cell.v === 'number' ? 'right' : 'left');
+      // text that doesn't wrap spills into the empty cells beside it, as in Excel
+      if (!sp && !wrap && h === 'left') { const rr = rows[r]; while (c2 < D.cols - 1 && (rr.c[c2 + 1].v === null || rr.c[c2 + 1].v === '') && !span(r, c2 + 1) && jtTextW(txt, st.f[1], bold) * k > (X(c2 + 1) - X(c1)) - 2 * pad) c2++; }
+      const x1 = X(c1), x2 = X(c2 + 1), y1 = Y1(r), y2 = Y2(r);
+      const lines = wrap ? jtWrap(txt, (x2 - x1 - 2 * pad) / k, st.f[1], bold) : [txt];
+      const lh = st.f[1] * 1.22 * k, blockH = lh * lines.length;
+      const y0 = st.v === 'center' ? (y1 + y2) / 2 - blockH / 2 : st.v === 'top' ? y1 + 1.2 * k : y2 - blockH - 1.2 * k;
+      lines.forEach((ln, i) => {
+        const by = y0 + lh * i + size * 0.86;
+        if (h === 'center' || h === 'centerContinuous') doc.text(ln, (x1 + x2) / 2, by, { align: 'center' });
+        else if (h === 'right') doc.text(ln, x2 - pad, by, { align: 'right' });
+        else doc.text(ln, x1 + pad, by);
+      });
+    }));
+    // the logo, on the first page
+    if (pi === 0 && logo) { const L = D.logo; doc.addImage(logo.dataUrl, 'PNG', m.l + (cx[L.col] + L.colOff * JT_PX) * k, m.t + L.rowOff * JT_PX * k, L.w * JT_PX * k, L.h * JT_PX * k, 'dhr-gankco', 'FAST'); }
+  });
+}
+async function jtHsePdfMany(job, ids, set) {
+  if (!ids.length) return toast('There are no HSE reports yet.', true);
+  const full = (await jtFetchAll(ids, id => q(sb.rpc('jt_hse_get', { p_id: id })), set)).sort((a, b) => a.report_date.localeCompare(b.report_date) || String(a.well).localeCompare(String(b.well)));
+  const doc = await jtDorDoc(); const logo = await jtDhrLogo();
+  full.forEach((h, i) => { if (i) doc.addPage(); jtDhrDraw(doc, jtDhrModel(h), logo, ['draft', 'returned'].includes(h.status)); });
+  const d1 = full[0].report_date, d2 = full[full.length - 1].report_date, label = job?.job_type || job?.project || full[0].job?.job_type || full[0].job?.job_no || '';
+  doc.setProperties({ title: full.length === 1 ? `HSE Daily Report - ${full[0].well} - ${fd(d1)}` : `HSE Daily Reports - ${label}`, author: S.profile?.full_name || '' });
+  const name = jtFile(full.length === 1 ? `HSE Daily Report - ${full[0].well} - ${jtShortDate(d1)} ${d1.slice(0, 4)}.pdf` : `HSE Daily Reports - ${label} ${jtShortDate(d1)} - ${jtShortDate(d2)} ${d2.slice(0, 4)}.pdf`);
+  doc.save(name); return name;
 }
 
 function jtBreakdownSheet(wb, j, rows, gkId, gk) {

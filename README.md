@@ -1,4 +1,4 @@
-# GANKCO Nest: version 3.0.10 (phone notifications and emails for every bell notification)
+# GANKCO Nest: version 3.0.11 (JobTrack: the HSE Daily Report, everyone can view, whole-job downloads, works with no signal)
 
 *Built to support engineered solutions.*
 
@@ -8,6 +8,29 @@
 - **Database and sign-in:** Supabase project in the **GANKCO Energy Services** organization (Nest Gmail; Ehis also an Owner).
 - **Emails:** sent by Brevo from **nest-alerts@gankcoenergy.com** as "GANKCO Nest". Sign-in emails use Supabase's custom SMTP (templates in Supabase → Authentication → Emails → Templates). Alert emails use the Brevo API key saved in Supabase Vault as `brevo_api_key`, on a schedule (pg_cron).
 - **DNS (company IT):** `nest` CNAME → `gankco-energy.github.io`, plus the Brevo verification records.
+
+## Install 3.0.11 (about 3 minutes)
+
+3.0.10 must already be installed (with the `26b` access fix).
+
+1. **Supabase → SQL Editor:** open a **New query**, paste the whole of **`27-nest-v3.0.11-upgrade.sql`**, press **Run**. It ends with **Nest 3.0.11 installed**. It is all-or-nothing and safe to run again.
+2. **GitHub:** unzip **`gankco-nest-v3.0.11.zip`** and upload everything into **github.com/gankco-energy/gankco-nest**, then commit. Keep the `CNAME` file. (New files: `js/jt-dhr.js`, `brand/dhr-gankco.png`; `sw.js` is changed.)
+3. Reload Nest (**Ctrl + Shift + R**). The footer says **v3.0.11**.
+4. On each job, **Wells, crew & items → Edit crew**: make sure the HSE person on board is ticked **HSE**.
+
+### What's new in 3.0.11
+- **Everyone with Nest can view JobTrack.** Every job, daily report, HSE report and ticket, view only. The people on a job's crew work on it, whatever their role (so an HSE officer needs nothing more than being ticked HSE on the crew). The Developer sets each person on the Team page: Admin, Engineer, Viewer (management), View only (everyone's default) or No access. **Jobs** has **My jobs** and **All jobs**.
+- **The HSE Daily Report**, laid out like GANKCO's own (GES-QMS-REP-005-007):
+  - filled each day for each well by the HSE person: people, weather, POB in the job's categories, toolbox talk, task, hazards (UA or UC, with the action taken), HSE statistics and activities, safety inspection;
+  - Nest works out total POB, man-hours (POB × 12), the UA and UC counts from the hazards, and every cumulative figure across the whole job;
+  - as soon as it's saved it fills the daily report's HSE part (weather, POB, man-hours, TRI = MTC + LTI + fatalities, LTI, HSE comment); the daily report can't be sent until it's in;
+  - the lead or an operations manager can fill it on the HSE person's behalf (recorded); when the HSE person isn't on Nest, the lead fills it;
+  - the operations manager reviews it or sends it back, like the daily report;
+  - PDF (one page, two when the hazards run long) and Excel, both in the template's own layout.
+- **The 4pm HSE reminder:** every day while a job is mobilised or on location, the HSE person is reminded (bell, phone, email) about any well with no HSE report sent that day.
+- **POB categories per job** (GANKCO, Client, Crane, Subcontractors, Others to start; up to 7): JobTrack settings for new jobs, and **Wells, crew & items → POB categories** on each job. The daily report's POB line shows each one.
+- **Download reports** on a job: daily reports or HSE reports, as one PDF (one page each, photos at the back if wanted) or one Excel file (one sheet each), all wells or one, the whole job or some dates, drafts left out unless ticked (then marked DRAFT). Whole-job downloads are for the job's crew, operations managers and management; anyone can download a single report. Every download is in the audit log.
+- **No signal:** Nest now keeps its own files on the phone and a copy of the jobs you're on, so it opens with no signal. Daily reports and HSE reports can be typed and saved; they're sent by themselves when the signal is back (press **Reconnect** on the green bar). Approving, starting jobs and seeing other people's new reports still need signal. Nest must have been opened once with signal after each update.
 
 ## Install 3.0.10 (about 8 minutes)
 
