@@ -1,7 +1,8 @@
 // ================================================================ 3.0.12 OPERATION RECORDS
 // End-of-job reports, technical proposals and other documents, in folders. The files live in the Nest Gmail's Google Drive,
 // but everything is done here: the nest-records function talks to Drive, the database keeps the folders, tags and versions.
-// Admin: folders, rename, move, delete, empty the bin. Contributor: upload, new versions, make folders, tag. Viewer: open and download.
+// Admin: folders, rename, move, delete, empty the bin. Contributor: upload, new versions, make folders, tag, and rename or delete
+// (to the recycle bin) what they uploaded or made themselves. Viewer: open and download.
 S.rec = S.rec || { open: new Set(), sel: new Set(), selF: new Set(), filter: {} };
 const recRole = () => appRole('records');
 const recAdmin = () => recRole() === 'admin' && !S.viewAs;
@@ -120,7 +121,8 @@ const recFolder = {
       `<div class="rec-wrap"><aside class="rec-side" id="rec-side"></aside><div class="rec-main">
         <form class="rec-find" id="rec-find" role="search"><span>${ico('search')}</span><input type="search" name="q" placeholder="Search names, tags and the words inside documents" aria-label="Search Operation Records"><button class="btn small" type="submit">Search</button></form>
         ${f && (w || admin) ? `<div class="rec-ftools">${w && d.files.length + d.folders.length ? `<button class="btn small" id="rec-tagall">${ico('label')}Tag everything in this folder</button>` : ''}
-          ${admin ? `<button class="btn small" id="rec-ren">${ico('edit')}Rename</button><button class="btn small" id="rec-mv">${ico('move')}Move</button><button class="btn small danger" id="rec-del">${ico('trash')}Delete folder</button>` : ''}</div>` : ''}
+          ${admin || f.mine ? `<button class="btn small" id="rec-ren">${ico('edit')}Rename</button>` : ''}${admin ? `<button class="btn small" id="rec-mv">${ico('move')}Move</button>` : ''}
+          ${admin || f.all_mine ? `<button class="btn small danger" id="rec-del">${ico('trash')}Delete folder</button>` : ''}</div>` : ''}
         <section class="panel rec-list" id="rec-drop">
           <header><h2>${f ? 'In this folder' : 'Folders'}</h2><span class="meta">${[d.folders.length ? plural(d.folders.length, 'folder') : '', f ? plural(d.files.length, 'document') : ''].filter(Boolean).join(' · ')}</span>
             ${d.files.length > 6 ? `<span class="right rec-flt">${types.length ? `<select id="rec-ft" aria-label="Type"><option value="">Every type</option>${types.map(t => opt(t, t, flt.type)).join('')}</select>` : ''}
@@ -132,7 +134,8 @@ const recFolder = {
           <div class="rec-dropov" aria-hidden="true">${ico('up')}<b>Drop to upload into ${esc(f ? f.name : 'Operation Records')}</b></div>
         </section>
         <div class="rec-selbar" id="rec-selbar" hidden><b id="rec-seln"></b><span class="jt-sp"></span>
-          ${w ? `<button class="btn small" id="rec-stag">${ico('label')}Tag</button>` : ''}${admin ? `<button class="btn small" id="rec-smv">${ico('move')}Move</button><button class="btn small danger" id="rec-sdel">${ico('trash')}Delete</button>` : ''}
+          ${w ? `<button class="btn small" id="rec-stag">${ico('label')}Tag</button>` : ''}${admin ? `<button class="btn small" id="rec-smv">${ico('move')}Move</button>` : ''}${w ? `<button class="btn small danger" id="rec-sdel">${ico('trash')}Delete</button>` : ''}
+          <span class="rec-selnote" id="rec-selnote" hidden>You can delete only documents you uploaded.</span>
           <button class="btn small" id="rec-sclr">Clear</button></div>
       </div></div>`;
   },
@@ -184,10 +187,12 @@ const recFolder = {
     const mv = $('#rec-mv', main); if (mv) mv.onclick = () => recMove(d.tree, [d.folder.id], [], d.folder.name);
     const del = $('#rec-del', main); if (del) del.onclick = () => recDelete([d.folder.id], [], `the folder ${d.folder.name} and everything in it`, d.folder.parent_id ? '#/rec/f/' + d.folder.parent_id : '#/rec');
     // selecting several
-    const bar = $('#rec-selbar', main);
+    const bar = $('#rec-selbar', main); const mine = new Set(d.files.filter(x => x.mine).map(x => x.id));
     const sync = () => { const n = S.rec.sel.size + S.rec.selF.size; bar.hidden = !n;
       $('#rec-seln', main).textContent = [S.rec.selF.size ? plural(S.rec.selF.size, 'folder') : '', S.rec.sel.size ? plural(S.rec.sel.size, 'document') : ''].filter(Boolean).join(' and ') + ' selected';
-      const t = $('#rec-stag', main); if (t) t.hidden = !S.rec.sel.size || !!S.rec.selF.size; };
+      const t = $('#rec-stag', main); if (t) t.hidden = !S.rec.sel.size || !!S.rec.selF.size;
+      // a Contributor deletes only what they uploaded themselves
+      const sd = $('#rec-sdel', main); if (sd && !recAdmin()) { const others = [...S.rec.sel].some(id => !mine.has(id)); sd.hidden = !n || others; $('#rec-selnote', main).hidden = !others; } };
     $$('[data-s]', main).forEach(c => c.onchange = () => { c.checked ? S.rec.sel.add(+c.dataset.s) : S.rec.sel.delete(+c.dataset.s); c.closest('li').classList.toggle('sel', c.checked); sync(); });
     $$('[data-sf]', main).forEach(c => c.onchange = () => { c.checked ? S.rec.selF.add(+c.dataset.sf) : S.rec.selF.delete(+c.dataset.sf); c.closest('li').classList.toggle('sel', c.checked); sync(); });
     $('#rec-sclr', main).onclick = () => { S.rec.sel.clear(); S.rec.selF.clear(); $$('.rec-ck input', main).forEach(c => { c.checked = false; c.closest('li').classList.remove('sel'); }); sync(); };
@@ -212,7 +217,7 @@ async function recMove(tree, folders, files, what) {
   catch (e) { toast(niceError(e), true); }
 }
 async function recDelete(folders, files, what, after) {
-  if (!confirm(`Move ${what} to the recycle bin?\n\nAdmins can bring it back from the recycle bin for 30 days. After that it’s deleted for good, from Google Drive too.`)) return;
+  if (!confirm(`Move ${what} to the recycle bin?\n\n${recAdmin() ? 'You' : 'An Operation Records admin'} can bring it back from the recycle bin for 30 days. After that it’s deleted for good, from Google Drive too.`)) return;
   try { const n = await q(sb.rpc('rec_delete', { p_folders: folders, p_files: files })); toast(`Moved to the recycle bin${n > 1 ? ` (${plural(n, 'item')})` : ''}`); S.rec.sel.clear(); S.rec.selF.clear();
     if (after) go(after); else render({ quiet: true }); }
   catch (e) { toast(niceError(e), true); }
@@ -268,7 +273,7 @@ const recFile = {
           <div><span>Version</span><b>${f.version}${f.versions.length ? ` <span class="sub">(${plural(f.versions.length, 'earlier version')} below)</span>` : ''}</b></div>
           <div><span>${f.version > 1 ? 'This version uploaded' : 'Uploaded'}</span><b>${fdt(f.uploaded_at)}</b><span class="sub">${esc(f.uploaded_by || '')}</span></div>
           <div><span>Downloads</span><b>${f.downloads ? plural(f.downloads, 'time') : 'Not yet'}</b></div></div>
-          ${admin && !gone ? `<div class="body actionrow"><button class="btn small" id="rf-ren">${ico('edit')}Rename</button><button class="btn small" id="rf-mv">${ico('move')}Move</button><button class="btn small danger" id="rf-del">${ico('trash')}Delete</button></div>` : ''}</section>
+          ${(admin || (w && f.mine)) && !gone ? `<div class="body actionrow"><button class="btn small" id="rf-ren">${ico('edit')}Rename</button>${admin ? `<button class="btn small" id="rf-mv">${ico('move')}Move</button>` : ''}<button class="btn small danger" id="rf-del">${ico('trash')}Delete</button></div>` : ''}</section>
         <section class="panel"><header><h2>Tags</h2>${w && !gone ? `<span class="right"><button class="btn small" id="rf-tag">${ico('label')}${f.doc_type || f.client || f.job_no || f.well ? 'Change' : 'Add tags'}</button></span>` : ''}</header>
           <div class="body">${f.doc_type || f.client || f.job_no || f.well || f.year ? `<div class="jt-facts rec-facts"><div><span>Type</span><b>${esc(f.doc_type || '—')}</b></div><div><span>Year</span><b>${f.year || '—'}</b></div>
             <div><span>Client</span><b>${esc(f.client || '—')}</b></div><div><span>Job no.</span><b>${f.job_id ? `<a href="#/jt/job/${f.job_id}">${esc(f.job_no)}</a>` : '—'}</b></div><div><span>Well</span><b>${esc(f.well || '—')}</b></div></div>`

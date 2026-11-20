@@ -57,7 +57,7 @@
   - Uploading a same-named document adds a new version; earlier versions are kept and can be brought back.
   - Deleting goes to a recycle bin for 30 days (Admins bring things back or empty it); after 30 days it's removed from Drive too.
   - Every download is in the audit log. Operation Records can be locked for maintenance on its own.
-  - Roles: **Admin** (folders, rename, move, delete, recycle bin, settings), **Contributor** (upload, new versions, make folders, tag), **Viewer** (open, preview, download).
+  - Roles: **Admin** (rename, move and delete anything, recycle bin, settings), **Contributor** (upload, new versions, make folders, tag, and rename or delete what they uploaded themselves), **Viewer** (open, preview, download).
   - Largest document 300 MB (the Developer can change it in Records settings).
 
 ## Install 3.0.11 (about 3 minutes)

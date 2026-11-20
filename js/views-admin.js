@@ -309,8 +309,8 @@ ROUTES.team = {
         <dt>JobTrack · Viewer (management)</dt><dd>Sees every job and can download all of a job’s reports at once.</dd>
         <dt>JobTrack · View only</dt><dd>Everyone else with Nest. Sees every job, report and ticket, and downloads one report at a time. Someone on a job’s crew works on that job whatever their role: the HSE person on board fills the HSE Daily Report.</dd>
         <dt>JobTrack · No access</dt><dd>JobTrack doesn’t open for them.</dd>
-        <dt>Operation Records · Admin</dt><dd>Everything a Contributor does, plus renaming, moving and deleting folders and documents, bringing them back from the recycle bin and emptying it.</dd>
-        <dt>Operation Records · Contributor</dt><dd>Uploads documents and whole folders (their folders come too), adds new versions, makes folders and tags documents.</dd>
+        <dt>Operation Records · Admin</dt><dd>Everything a Contributor does, plus renaming, moving and deleting anyone’s folders and documents, bringing them back from the recycle bin and emptying it.</dd>
+        <dt>Operation Records · Contributor</dt><dd>Uploads documents and whole folders (their folders come too), adds new versions, makes folders and tags documents. Can rename or delete what they uploaded or made themselves (deleting goes to the recycle bin, where an Admin can bring it back).</dd>
         <dt>Operation Records · Viewer</dt><dd>Opens, previews and downloads documents. Only people given Operation Records see it at all.</dd>
         <dt>JobTrack testing</dt><dd>While JobTrack is in testing (Nest settings → Apps in testing), only its testers can open it.</dd>
         <dt>Purchase Order · Staff</dt><dd>Raises POs with no approval step, and revises, cancels and closes their own. Only you can delete a PO.</dd>
