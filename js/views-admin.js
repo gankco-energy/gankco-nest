@@ -241,11 +241,11 @@ ROUTES.locations = {
 const ACCESS_GROUPS = [['ops', 'Eng & Ops', 'Engineering & Operations'], ['qhse', 'QHSE', 'QHSE']];
 const groupDepts = g => S.depts.filter(d => (d.access_group || 'ops') === g).map(d => d.id);
 const accessOf = pid => { const mine = S.members.filter(m => m.profile_id === pid).map(m => m.department_id); return ACCESS_GROUPS.map(a => a[0]).filter(g => groupDepts(g).some(id => mine.includes(id))); };
-const APP_LIST = [['inventory', 'Inventory'], ['jobtrack', 'JobTrack'], ['po', 'Purchase Order'], ['proforma', 'PFI & Quote'], ['people', 'PeopleCore']];
+const APP_LIST = [['inventory', 'Inventory'], ['jobtrack', 'JobTrack'], ['po', 'Purchase Order'], ['proforma', 'PFI & Quote'], ['people', 'PeopleCore'], ['records', 'Operation Records']];
 // 3.0.11: JobTrack access in one choice. Everyone with Nest can view JobTrack unless set to No access.
 const JT_ACCESS = [['admin', 'Admin'], ['engineer', 'Engineer'], ['viewer', 'Viewer (management)'], ['everyone', 'View only'], ['none', 'No access']];
 const jtAccessOf = p => (p.app_roles || {}).jobtrack === 'none' ? 'none' : (p.apps || []).includes('jobtrack') ? ((p.app_roles || {}).jobtrack || 'engineer') : 'everyone';
-const appRolePick = (p, k, name) => APP_ROLES[k] ? `<select class="inline mini" ${name ? `name="${name}"` : `data-approle="${k}" data-pid="${p.id}"`}>${APP_ROLES[k].map(([v, l]) => opt(v, l, (p.app_roles || {})[k] || (k === 'jobtrack' ? 'engineer' : 'staff'))).join('')}</select>` : '';
+const appRolePick = (p, k, name) => APP_ROLES[k] ? `<select class="inline mini" ${name ? `name="${name}"` : `data-approle="${k}" data-pid="${p.id}"`}>${APP_ROLES[k].map(([v, l]) => opt(v, l, (p.app_roles || {})[k] || appRoleDefault(k))).join('')}</select>` : '';
 ROUTES.team = {
   async load() {
     if (!isSuper()) return topbar('Team & access') + '<div class="notice">Only the Developer manages who uses Nest.</div>';
@@ -298,7 +298,7 @@ ROUTES.team = {
           ${rows.length ? `<div class="tablewrap"><table class="t stack"><thead><tr><th>Service line</th><th>Staff</th><th>Receive PO deliveries</th></tr></thead><tbody>
           ${rows.map(({ d, m, p }) => `<tr><td>${esc(d.short_name || d.name)}</td><td class="name">${esc(p.full_name || p.email)}</td><td><label class="switch mini"><input type="checkbox" data-porecv="${p.id}" data-dept="${d.id}" ${m.po_receive ? 'checked' : ''}><span class="sw"></span><span class="sub">${m.po_receive ? 'Yes' : 'No'}</span></label></td></tr>`).join('')}</tbody></table></div>` : '<div class="body"><span class="sub">No staff in service lines yet.</span></div>'}</section>`;
       })()}
-      <section class="panel"><header><h2>What each role can do</h2><span class="meta">Inventory, JobTrack, Purchase Order, PFI & Quote, PeopleCore</span></header><div class="body">
+      <section class="panel"><header><h2>What each role can do</h2><span class="meta">Inventory, JobTrack, Purchase Order, PFI & Quote, PeopleCore, Operation Records</span></header><div class="body">
         <p class="muted">Each app has its own roles. Being an admin in one app gives nothing in another.</p>
         <dl class="kv mt">
         <dt>Inventory · Admin</dt><dd>Manages items, stock, locations, labels and Inventory settings in every line. Approves requests, stock changes and counts only for the lines where you’ve made them main or backup admin. Can switch to <b>My view</b> to work as staff do.</dd>
@@ -309,6 +309,9 @@ ROUTES.team = {
         <dt>JobTrack · Viewer (management)</dt><dd>Sees every job and can download all of a job’s reports at once.</dd>
         <dt>JobTrack · View only</dt><dd>Everyone else with Nest. Sees every job, report and ticket, and downloads one report at a time. Someone on a job’s crew works on that job whatever their role: the HSE person on board fills the HSE Daily Report.</dd>
         <dt>JobTrack · No access</dt><dd>JobTrack doesn’t open for them.</dd>
+        <dt>Operation Records · Admin</dt><dd>Everything a Contributor does, plus renaming, moving and deleting folders and documents, bringing them back from the recycle bin and emptying it.</dd>
+        <dt>Operation Records · Contributor</dt><dd>Uploads documents and whole folders (their folders come too), adds new versions, makes folders and tags documents.</dd>
+        <dt>Operation Records · Viewer</dt><dd>Opens, previews and downloads documents. Only people given Operation Records see it at all.</dd>
         <dt>JobTrack testing</dt><dd>While JobTrack is in testing (Nest settings → Apps in testing), only its testers can open it.</dd>
         <dt>Purchase Order · Staff</dt><dd>Raises POs with no approval step, and revises, cancels and closes their own. Only you can delete a PO.</dd>
         <dt>Purchase Order · Viewer</dt><dd>Sees the Overview and every PO, and downloads them. Can’t change anything.</dd>
@@ -394,7 +397,7 @@ function devTransfer() {
     onOpen: box => { const s = $('#dt-to', box), h = $('#dt-hint', box); const upd = () => { const p = S.people[s.value]; h.textContent = `Type: ${p.full_name || p.email}`; }; s.onchange = upd; upd(); },
     onSubmit: async x => {
       const apps = APP_LIST.map(a => a[0]).filter(k => x['app_' + k]);
-      const roles = Object.fromEntries(apps.filter(k => APP_ROLES[k]).map(k => [k, x['role_' + k] || 'staff']));
+      const roles = Object.fromEntries(apps.filter(k => APP_ROLES[k]).map(k => [k, x['role_' + k] || appRoleDefault(k)]));
       await q(sb.rpc('dev_transfer', { p_to: x.to, p_confirm: x.confirm, p_apps: apps, p_roles: roles }));
       toast('Developer role handed over'); setTimeout(() => location.reload(), 600);
     } });

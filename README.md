@@ -1,4 +1,4 @@
-# GANKCO Nest: version 3.0.12 (JobTrack: ticket PDFs with their receipts or the client-signed copy)
+# GANKCO Nest: version 3.0.12 (JobTrack Live, reports that save themselves, ticket PDFs with receipts, and Operation Records)
 
 *Built to support engineered solutions.*
 
@@ -9,21 +9,56 @@
 - **Emails:** sent by Brevo from **nest-alerts@gankcoenergy.com** as "GANKCO Nest". Sign-in emails use Supabase's custom SMTP (templates in Supabase → Authentication → Emails → Templates). Alert emails use the Brevo API key saved in Supabase Vault as `brevo_api_key`, on a schedule (pg_cron).
 - **DNS (company IT):** `nest` CNAME → `gankco-energy.github.io`, plus the Brevo verification records.
 
-## Install 3.0.12 (about 2 minutes)
+## Install 3.0.12 (about 20 minutes, most of it the one-time Google setup)
 
-3.0.11 must already be installed. There's no SQL this time.
+3.0.11 must already be installed. If you uploaded the first 3.0.12 zip (ticket PDFs only), this one replaces it: upload it the same way.
 
-1. **GitHub:** unzip **`gankco-nest-v3.0.12.zip`** and upload everything into **github.com/gankco-energy/gankco-nest**, then commit. Keep the `CNAME` file. (New file: `vendor/pdf-lib.min.js`.)
-2. Reload Nest (**Ctrl + Shift + R**). The footer says **v3.0.12**.
+1. **Supabase → SQL Editor:** open a **New query**, paste the whole of **`28-nest-v3.0.12-upgrade.sql`**, press **Run**. It ends with **Nest 3.0.12 installed**. It is all-or-nothing and safe to run again.
+2. **Supabase → Edge Functions → Deploy a new function → Via Editor:**
+   - Name it exactly **`nest-records`**.
+   - Delete the sample code, paste the whole of **`nest-records/index.ts`**, and press **Deploy function**.
+   - Open the function's **Details** (or Settings) and switch **off** "Verify JWT with legacy secret" / "Enforce JWT verification". Save. (The function checks who's asking itself, through Nest's own rules.)
+3. **Google Cloud (once), signed in as the Nest Gmail** at **console.cloud.google.com**:
+   1. Make a new project called **GANKCO Nest** (project list at the top → **New project**).
+   2. **APIs & Services → Library:** search **Google Drive API**, open it, press **Enable**.
+   3. **Google Auth Platform** (also shown as **OAuth consent screen**) → **Get started**:
+      - App name **GANKCO Nest**, support email the Nest Gmail;
+      - Audience **External**;
+      - contact email the Nest Gmail; agree and **Create**.
+   4. **Google Auth Platform → Data access → Add or remove scopes:** tick **`.../auth/drive.file`** ("See, edit, create and delete only the specific Google Drive files you use with this app") and save. Nest can only see the files and folders it made, nothing else in that Drive.
+   5. **Google Auth Platform → Audience → Publish app**, and confirm. The status must say **In production**. (In *Testing*, Google stops the connection after 7 days.) No Google review is needed for this permission.
+   6. **Google Auth Platform → Clients → Create client:**
+      - Application type **Web application**, name **Nest Operation Records**;
+      - under **Authorized redirect URIs** add exactly:
+        `https://pzpjwgghykpaephvlmno.supabase.co/functions/v1/nest-records/oauth`
+      - press **Create**. Google shows a **Client ID** and a **Client secret**. Leave that window open.
+4. **Supabase → Edge Functions → Secrets → Add new secret** (type them in yourself; don't paste them into chat or email):
+   - **`GOOGLE_CLIENT_ID`**: the Client ID from Google;
+   - **`GOOGLE_CLIENT_SECRET`**: the Client secret from Google.
+   - Save. You can close the Google window now.
+5. **GitHub:** unzip **`gankco-nest-v3.0.12.zip`** and upload everything into **github.com/gankco-energy/gankco-nest**, then commit. Keep the `CNAME` file. (New files: `js/jt-live.js`, `js/rec.js`, `vendor/pdf-lib.min.js`.)
+6. Reload Nest (**Ctrl + Shift + R**). The footer says **v3.0.12**.
+7. **Connect Google Drive:** open **Operation Records → Records settings → Connect Google Drive**. Google asks you to sign in: choose the **Nest Gmail** and press **Continue/Allow**. You come back to Nest and it says **Google Drive is connected**. (If Google says the app isn't verified, press **Advanced → Go to GANKCO Nest**: it's your own app.)
+8. **Team & access:** tick **Operation Records** for the people who should have it and choose **Admin**, **Contributor** or **Viewer**. Only people given the app see its tile.
+9. Upload the folder you've arranged: open **Operation Records**, press **Upload → A whole folder** (on a computer, in Chrome or Edge), and choose it. Its folders come too, at every level. 2 GB takes a while: keep the tab open (you can use Nest meanwhile). If it stops, upload the same folder again: what's already there is skipped.
 
 ### What's new in 3.0.12
-- **Reimbursables ticket → PDF** asks: **Ticket only**, or **Ticket with receipts and documents**. The second gives one PDF:
-  - the ticket;
-  - a page listing what's attached, which payment each is for, and the page it starts on (payments with no receipt are marked *No receipt uploaded*);
-  - the receipts in payment order, then other documents.
-  - Photos go one per page with a slim heading (e.g. *Receipt for payment 2 · Truck in/out · N 30,000.00*); PDFs go in exactly as uploaded.
-- **Job ticket → PDF** asks: **Ticket only**, or **Ticket with the client-signed copy**.
-- Each download is in the audit log.
+- **JobTrack Live** (menu and phone bar): today's activity lines from every job on location, newest first, as the crews type them.
+  - A card per job: wells and their report status, equipment status, weather (from the HSE report), the latest line and who updated it when.
+  - Filter by job; pick an earlier day. Today's page looks again every minute and marks new lines **New**.
+- **Daily reports save themselves.** A line goes to Nest once it has a start time and words, when the engineer moves to another line or pauses for about 10 seconds. The engineer sees *Saved to Nest 14:22*. With no signal: *Waiting for signal: 1 line on this phone*, and it goes when the signal is back. **Save** and **Save and send** work as before; sending is still the engineer's choice.
+- A draft shows **Last updated 14:22 by …**, and someone reading a draft sees new lines by themselves (it looks again every minute).
+- **Ticket PDFs with attachments:** a reimbursables ticket as **Ticket only** or **Ticket with receipts and documents** (one PDF: the ticket, a list of what's attached, then each receipt and document); a job ticket with the **client-signed copy**.
+- **Operation Records** (new app): end-of-job reports, technical proposals and any other files (design software files too), in folders. Word, Excel, PowerPoint, PDF and photos preview in Nest; other files are downloaded to open in their own program.
+  - Kept in the Nest Gmail's Google Drive (folder *Nest Operation Records*), but everything is done in Nest: nobody opens Drive.
+  - Upload files, or a whole folder with all its folders inside (drag and drop works too).
+  - Preview in Nest (Word, Excel and PowerPoint are turned into a preview by Google, once), download, search names, tags and the words inside documents.
+  - Tags (all optional): Type (list in Records settings), Client and Job no. (from JobTrack), Well, Year. Tag one document, several, or a whole folder at once.
+  - Uploading a same-named document adds a new version; earlier versions are kept and can be brought back.
+  - Deleting goes to a recycle bin for 30 days (Admins bring things back or empty it); after 30 days it's removed from Drive too.
+  - Every download is in the audit log. Operation Records can be locked for maintenance on its own.
+  - Roles: **Admin** (folders, rename, move, delete, recycle bin, settings), **Contributor** (upload, new versions, make folders, tag), **Viewer** (open, preview, download).
+  - Largest document 300 MB (the Developer can change it in Records settings).
 
 ## Install 3.0.11 (about 3 minutes)
 

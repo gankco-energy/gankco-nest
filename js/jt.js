@@ -49,7 +49,7 @@ function jtMenuRefresh() {
 
 // ---------------------------------------------------------------- menu, phone bar, home tile
 function jtNav() {
-  const main = [['jt', 'Overview', 'home'], ['jt/jobs', 'Jobs', 'derrick'], ...(jtWriter() ? [['jt/report/new', 'New daily report', 'plus']] : []),
+  const main = [['jt', 'Overview', 'home'], ['jt/live', 'Live', 'live'], ['jt/jobs', 'Jobs', 'derrick'], ...(jtWriter() ? [['jt/report/new', 'New daily report', 'plus']] : []),
     ...(jtHseWriter() ? [['jt/hse/new', 'New HSE report', 'cert']] : []), ['jt/items', 'Ticket items', 'label']];
   const setup = [...(jtAdmin() || isSuper() ? [['jt/clients', 'Clients', 'building'], ['jt/settings', 'JobTrack settings', 'gear']] : []), ...(isSuper() ? [['team', 'Nest admin', 'users']] : [])];
   return { main, setup };
@@ -62,7 +62,7 @@ function jtBottomBar() {
     <a href="#/jt/jobs" data-r="jt/jobs">${ico('derrick')}Jobs</a>
     ${jtWriter() ? `<a href="#/jt/report/new" data-r="jt/report/new" class="scan"><span class="disc">${ico('plus')}</span>Report</a>`
       : jtHseWriter() ? `<a href="#/jt/hse/new" data-r="jt/hse/new" class="scan"><span class="disc">${ico('plus')}</span>HSE report</a>` : ''}
-    <a href="#/jt/items" data-r="jt/items">${ico('label')}Items</a>
+    <a href="#/jt/live" data-r="jt/live">${ico('live')}Live</a>
     <a href="#/" data-r="home">${ico('grid')}Apps</a></nav>`;
 }
 async function jtTileMeta(el) {
@@ -84,7 +84,7 @@ ROUTES.jt = {
     await jtLoad();
     const p1 = parts[1];
     this.page = !p1 ? jtOverview : p1 === 'jobs' ? jtJobs : p1 === 'job' ? jtJob : p1 === 'report' ? jtReport : p1 === 'hse' ? jtHse : p1 === 'ticket' ? jtTicket
-      : p1 === 'items' ? jtItemsPage : p1 === 'clients' ? jtClientsPage : p1 === 'settings' ? jtSettingsPage : jtOverview;
+      : p1 === 'live' ? jtLive : p1 === 'items' ? jtItemsPage : p1 === 'clients' ? jtClientsPage : p1 === 'settings' ? jtSettingsPage : jtOverview;
     return this.page.load(parts, params);
   },
   bind(main, parts, params) { if (jtRole() && this.page) this.page.bind(main, parts, params); }
@@ -103,7 +103,8 @@ const jtOverview = {
     if (!S.offline) jtPrefetch(mine.filter(j => j.status !== 'closed').map(j => j.id));
     return topbar('JobTrack', 'Field jobs, daily operation reports, HSE reports and job tickets. No prices here: pricing happens in PFI & Quote.',
         `${jtCanStart() ? `<button class="btn" id="jt-newjob">${ico('plus')}New job</button>` : ''}${jtHseWriter() && !jtWriter() ? `<a class="btn tagbtn" href="#/jt/hse/new">${ico('plus')}New HSE report</a>` : ''}${jtWriter() ? `<a class="btn tagbtn" href="#/jt/report/new">${ico('plus')}New daily report</a>` : ''}`) +
-      `<div class="board b4">
+      `<a class="jt-livebar" href="#/jt/live"><span class="jt-lvdot" aria-hidden="true"></span><b>Live</b><span>Today’s activities from every job on location, as the crews enter them</span><span class="jt-sp"></span>${ico('next')}</a>
+      <div class="board b4">
         <a class="kpi" href="#/jt/jobs"><div class="n">${active.length}</div><div class="l">${own ? 'Your jobs on location' : 'Jobs on location'}</div></a>
         <div class="kpi ${missing.length ? 'warn' : ''}"><div class="n">${missing.length}</div><div class="l">No daily report yet today</div></div>
         <div class="kpi ${o.to_approve.length ? 'warn' : ''}"><div class="n">${o.to_approve.length}</div><div class="l">Tickets to approve${S.jt.cfg?.can_approve ? '' : '<span class="sub"> (approvers only)</span>'}</div></div>
@@ -122,6 +123,7 @@ const jtOverview = {
           <div class="sub">${j.last_report ? 'Last report ' + fd(j.last_report) : 'No reports yet'}${['mobilised', 'on_location'].includes(j.status) ? (j.today_reports ? ' · ' + chip('ok', 'Today’s report in') : ' · ' + chip('pending', 'No report yet today')) + (j.today_hse ? ' · ' + chip('ok', 'HSE in') : '') : ''}${j.drafts ? ` · ${plural(j.drafts, 'draft')}` : ''}</div></a>
           ${(j.mine || jtAdmin()) && jtWriter() && ['mobilised', 'on_location'].includes(j.status) ? `<div class="end"><a class="btn small" href="#/jt/report/new?job=${j.id}">${ico('plus')}Today’s report</a></div>` : ''}</li>`).join('')}</ul>`
           : `<div class="empty">No jobs yet.${jtCanStart() ? ' Press <b>New job</b> to set one up.' : ' An operations manager sets jobs up and adds you to the crew.'}</div>`}
+        <div class="body jt-phlinks"><a href="#/jt/items">${ico('label')}Ticket items</a></div>
         ${own && o.jobs.length > mine.length ? `<div class="body muted small">You’re on ${plural(mine.length, 'job')}. Everyone can look at the other ${plural(o.jobs.length - mine.length, 'job')} under <a href="#/jt/jobs">All jobs</a>.</div>` : ''}</section>`;
   },
   bind(main) { const b = $('#jt-newjob', main); if (b) b.onclick = () => jtJobForm(); }
@@ -589,6 +591,7 @@ async function jtFlush() {
     const what = x.kind === 'hse' ? 'HSE report' : 'daily report';
     try {
       const id = await q(sb.rpc(x.kind === 'hse' ? 'jt_hse_save' : 'jt_report_save', { p: x.p }));
+      if (!x.p.id) window.dispatchEvent(new CustomEvent('jt-sent', { detail: { key: x.key, id } }));
       if (x.submit) await q(sb.rpc(x.kind === 'hse' ? 'jt_hse_submit' : 'jt_report_submit', { p_id: id }));
       try { localStorage.removeItem(x.key); } catch (e) { } toast(`Sent: ${what} for ${x.label}`);
     }
@@ -630,9 +633,11 @@ function jtAutoSummary(ops) {
   return out.length ? out.map(c => c.charAt(0).toUpperCase() + c.slice(1)).join('. ') + '.' : '';
 }
 
+let jtReportTimer = null;
+const jtSameDay = at => new Date(at).toDateString() === new Date().toDateString();
 const jtReport = {
   async load(parts, params) {
-    this.key = null; this.r = null; this.behalf = false;
+    this.key = null; this.r = null; this.behalf = false; if (this.autoInst) { this.autoInst.stop(); this.autoInst = null; }
     if (parts[2] === 'new') {
       const jobId = +params?.get('job');
       if (!jobId) return this.picker();
@@ -658,11 +663,14 @@ const jtReport = {
       this.j = await jtCached('job.' + r.job_id, () => q(sb.rpc('jt_job_get', { p_id: r.job_id })));
       this.key = `nest.jt.dor.${id}`;
     }
+    // a newer load of this page started meanwhile: this one is thrown away
+    if (!this.r) return '<div class="loading">Loading…</div>';
     const local = (() => { try { return JSON.parse(localStorage.getItem(this.key) || 'null'); } catch (e) { return null; } })();
     this.local = local && (!this.r.updated_at || local.at > new Date(this.r.updated_at).getTime()) ? local : null;
     // the HSE person on board (not the lead) reads the daily report; their own part is the HSE Daily Report
     this.hseOnly = !!(this.r.id && this.r.is_hse && !this.r.is_lead && !jtAdmin());
-    return this.hseOnly || !this.r.can_edit || S.viewAs ? this.view() : this.form();
+    this.mode = this.hseOnly || !this.r.can_edit || S.viewAs ? 'view' : 'form';
+    return this.mode === 'view' ? this.view() : this.form();
   },
   // which job? (from the phone bar)
   async picker() {
@@ -675,7 +683,9 @@ const jtReport = {
   head() {
     const r = this.r, j = this.j;
     return `<div class="jt-rhead"><div><div class="jt-rjob">${esc(j.job_no)} · ${esc(j.client?.short_name || j.client?.name || '')}</div>
-      <div class="jt-rmeta">${r.id ? `Report ${r.report_no} · day ${r.report_no} on this well · ` : ''}${r.id ? jtChip(JT_RSTATUS, r.status) : chip('muted', 'New')}${r.submitted_by_name ? ` <span class="sub">sent by ${esc(r.submitted_by_name)} ${fdt(r.submitted_at)}</span>` : ''}${r.reviewed_by_name ? ` <span class="sub">· reviewed by ${esc(r.reviewed_by_name)}</span>` : ''}</div></div></div>`;
+      <div class="jt-rmeta">${r.id ? `Report ${r.report_no} · day ${r.report_no} on this well · ` : ''}${r.id ? jtChip(JT_RSTATUS, r.status) : chip('muted', 'New')}${r.submitted_by_name ? ` <span class="sub">sent by ${esc(r.submitted_by_name)} ${fdt(r.submitted_at)}</span>` : ''}${r.reviewed_by_name ? ` <span class="sub">· reviewed by ${esc(r.reviewed_by_name)}</span>` : ''}</div>
+      ${r.id && r.updated_by_name && ['draft', 'returned'].includes(r.status) ? `<div class="jt-upd" id="jt-upd">${ico('clock')}Last updated ${esc(jtLiveHM(r.updated_by_at || r.updated_at))}${jtSameDay(r.updated_by_at || r.updated_at) ? '' : ' on ' + fd(r.updated_by_at || r.updated_at)} by ${esc(r.updated_by_name)}</div>` : ''}</div>
+      ${this.mode === 'form' && ['draft', 'returned'].includes(r.status || 'draft') && !S.viewAs ? `<span class="jt-as" id="jt-as" aria-live="polite"></span>` : ''}</div>`;
   },
   // 3.0.11: the HSE part comes from the HSE Daily Report for this well and day
   hseDay() { const r = this.r; return r.hse || (this.j.hse || []).find(h => h.well_id === r.well_id && h.report_date === r.report_date) || null; },
@@ -783,8 +793,78 @@ const jtReport = {
       `<div class="jt-actbar">${admin && r.status === 'submitted' ? `<button class="btn" id="jt-back">${ico('undo')}Send back</button><button class="btn primary" id="jt-ok">${ico('check')}Mark reviewed</button>` : ''}
         <button class="btn" id="jt-wa">${ico('chat')}WhatsApp</button><button class="btn" id="jt-pdf">${ico('pdf')}PDF</button><button class="btn" id="jt-xl">${ico('down')}Excel</button></div>`;
   },
+  // 3.0.12: a draft someone else is writing: look again every minute and show the new lines
+  watch(main) {
+    const r = this.r; clearInterval(jtReportTimer);
+    if (!r.id || !['draft', 'returned'].includes(r.status)) return;
+    const route = location.hash;
+    jtReportTimer = setInterval(async () => {
+      if (location.hash !== route) return clearInterval(jtReportTimer);
+      if (document.hidden || !navigator.onLine || $('dialog[open]')) return;
+      try { const x = await q(sb.rpc('jt_report_get', { p_id: r.id })); if (x.updated_at !== r.updated_at || x.status !== r.status) { jtCachePut('report.' + r.id, x); render({ quiet: true }); } } catch (e) { }
+    }, 60000);
+  },
+  // 3.0.12: finished lines (a start time and words) go to Nest by themselves after a 10-second pause, or when you move to another line,
+  // so the office sees them on the Live page. Save and Save and send work as before. With no signal the lines wait on the phone.
+  autoSave(main) {
+    const r = this.r, self = this, st = $('#jt-as', main);
+    if (self.autoInst) self.autoInst.stop();
+    const off = { stop() { }, hold() { } };
+    if (!st || !['draft', 'returned'].includes(r.status || 'draft')) return (self.autoInst = off);
+    const pick = () => { const p = self.collect(main); return { ...p, ops: p.ops.filter(o => jtTm(o.from)) }; };
+    const sig = p => JSON.stringify({ ...p, id: null });
+    const lineKeys = p => new Set(p.ops.map(o => o.from + '|' + o.desc));
+    // what Nest already has: a report opened from Nest has what was on the page (unless the phone holds newer changes)
+    let sent = r.id && !self.local ? pick() : r.id ? null : pick();
+    let busy = false, again = false, stopped = false, timer = null;
+    const say = (cls, html) => { st.className = 'jt-as ' + cls; st.innerHTML = html; };
+    const waiting = p => { const had = sent ? lineKeys(sent) : new Set(); const n = p.ops.filter(o => !had.has(o.from + '|' + o.desc)).length;
+      say('wait', `${ico('clock')}Waiting for signal: ${n ? plural(n, 'line') : 'changes'} on this phone`); };
+    const run = async () => {
+      clearTimeout(timer); if (stopped) return;
+      if (busy) { again = true; return; }
+      const p = pick();
+      if (!p.well_id || !p.ops.length || (sent && sig(p) === sig(sent))) return;
+      if (!navigator.onLine || S.offline) return waiting(p);
+      // a report saved on the phone with no signal is being sent: wait for it
+      if (!r.id && (jtFlushing || jtOutbox().some(x => x.key === self.key))) { timer = setTimeout(run, 4000); return; }
+      busy = true; const whole = self.collect(main);
+      try {
+        const id = await q(sb.rpc('jt_report_save', { p: { ...p, id: r.id } }));
+        sent = p; r.updated_at = r.updated_by_at = new Date().toISOString();
+        if (!r.id) self.adopt(id);
+        // nothing typed since, and every line was finished: the phone's copy isn't needed any more
+        const now = self.collect(main);
+        if (sig(whole) === sig({ ...now, id: null }) && whole.ops.every(o => jtTm(o.from))) { try { localStorage.removeItem(self.key); } catch (e) { } $('#jt-discard', main)?.closest('.notice')?.remove(); }
+        say('ok', `${ico('check')}Saved to Nest ${jtNowHM()}`);
+      } catch (e) {
+        if (jtNetErr(e)) waiting(p); else say('bad', `Not saved to Nest: ${esc(niceError(e))}`);
+      } finally { busy = false; if (again) { again = false; timer = setTimeout(run, 500); } }
+    };
+    const later = () => { clearTimeout(timer); timer = setTimeout(run, 10000); };
+    const f = $('#jt-dor', main);
+    f.addEventListener('input', later); f.addEventListener('change', later);
+    // moving to another line (or out of the activities) saves straight away
+    $('#jt-ops', main).addEventListener('focusout', e => { const row = e.target.closest('.jt-op'); if (row && !(e.relatedTarget && row.contains(e.relatedTarget))) setTimeout(run, 50); });
+    const online = () => setTimeout(run, 2500); window.addEventListener('online', online);
+    // the report was made from this phone's no-signal copy: carry on in it
+    const sentNew = e => { if (!r.id && e.detail?.key === self.key) self.adopt(e.detail.id); };
+    window.addEventListener('jt-sent', sentNew);
+    const stop = () => { stopped = true; clearTimeout(timer); window.removeEventListener('online', online); window.removeEventListener('jt-sent', sentNew); window.removeEventListener('hashchange', gone); };
+    const gone = () => { if (!(r.id && location.hash === '#/jt/report/' + r.id)) stop(); };
+    window.addEventListener('hashchange', gone);
+    if (!sent) timer = setTimeout(run, 1500);
+    return (self.autoInst = { stop, hold() { clearTimeout(timer); } });
+  },
+  // a new report now has its number in Nest: keep typing in it (the address changes, the page doesn't)
+  adopt(id) {
+    const r = this.r; r.id = id; const old = this.key; this.key = `nest.jt.dor.${id}`;
+    try { const v = localStorage.getItem(old); if (v) { localStorage.setItem(this.key, v); localStorage.removeItem(old); } } catch (e) { }
+    jtOutboxSet(jtOutbox().map(x => x.key === old ? { ...x, key: this.key, p: { ...x.p, id } } : x));
+    history.replaceState(null, '', '#/jt/report/' + id);
+  },
   bind(main) {
-    const r = this.r; if (!r) return; const self = this;
+    const r = this.r; if (!r) return; const self = this; clearInterval(jtReportTimer);
     // photos
     const phs = $$('[data-ph]', main);
     if (phs.length) q(sb.from('jt_files').select('id,mime,data').in('id', phs.map(p => +p.dataset.ph))).then(rows => rows.forEach(f => { const el = $(`[data-ph="${f.id}"] .jt-phimg`, main); if (el) el.innerHTML = `<img src="data:${f.mime};base64,${f.data}" alt="">`; })).catch(() => { });
@@ -797,9 +877,10 @@ const jtReport = {
     const ok = $('#jt-ok', main); if (ok) ok.onclick = async () => { try { await q(sb.rpc('jt_report_review', { p_id: r.id, p_ok: true, p_note: null })); toast('Reviewed'); render({ quiet: true }); } catch (e) { toast(niceError(e), true); } };
     const bk = $('#jt-back', main); if (bk) bk.onclick = () => modal({ title: 'Send this report back', submit: 'Send back', body: '<label class="f">What needs changing?<textarea name="note" rows="3" required></textarea></label>',
       onSubmit: async x => { await q(sb.rpc('jt_report_review', { p_id: r.id, p_ok: false, p_note: x.note })); toast('Sent back'); render({ quiet: true }); } });
-    if (!r.can_edit || this.hseOnly || !$('#jt-dor', main)) return;
+    if (!r.can_edit || this.hseOnly || !$('#jt-dor', main)) return this.watch(main);
     // typing: keep a copy on the phone
     const keep = debounce(() => { try { localStorage.setItem(this.key, JSON.stringify({ at: Date.now(), data: this.collect(main) })); } catch (e) { } }, 600);
+    const auto = this.autoSave(main);
     const ops = $('#jt-ops', main), endIn = $('[name=day_end]', main), sum = $('[name=summary]', main);
     // the summary follows the activities until someone edits it
     sum.dataset.auto = !sum.value.trim() || sum.value.trim() === jtAutoSummary(this.opsNow(main).filter(o => o.desc)) ? '1' : '';
@@ -856,7 +937,7 @@ const jtReport = {
         if (submit) await q(sb.rpc('jt_report_submit', { p_id: id }));
         try { localStorage.removeItem(this.key); } catch (e) { } jtOutboxSet(jtOutbox().filter(x => x.key !== this.key));
         toast(submit ? 'Report sent' : 'Saved');
-        if (!r.id) go('#/jt/report/' + id); else render({ quiet: true });
+        if (location.hash !== '#/jt/report/' + id) go('#/jt/report/' + id); else render({ quiet: true });
       } catch (e) {
         if (jtNetErr(e)) {
           const label = `${this.j.wells.find(w => w.id === p.well_id)?.name || ''} ${fd(p.report_date)}`;
@@ -866,8 +947,8 @@ const jtReport = {
         } else toast(niceError(e), true);
       }
     };
-    $('#jt-save', main).onclick = () => save(false);
-    const sd = $('#jt-send', main); if (sd) sd.onclick = () => save(true);
+    $('#jt-save', main).onclick = () => { auto.hold(); save(false); };
+    const sd = $('#jt-send', main); if (sd) sd.onclick = () => { auto.hold(); save(true); };
     const del = $('#jt-del', main); if (del) del.onclick = async () => { if (!confirm('Delete this daily report?')) return; try { await q(sb.rpc('jt_report_delete', { p_id: r.id })); try { localStorage.removeItem(this.key); } catch (e) { } toast('Deleted'); go('#/jt/job/' + this.j.id); } catch (e) { toast(niceError(e), true); } };
     const pa = $('#jt-phadd', main); if (pa) pa.onchange = async () => {
       const files = [...pa.files]; if (!files.length) return;

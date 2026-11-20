@@ -10,6 +10,6 @@ window.APP_CONFIG = {
   TAGLINE: 'Built to support engineered solutions',
   MOTTO: 'Providing engineered solutions',
   VERSION: '3.0.12',
-  BUILD: '3.0.12',          // changes with every update, so browsers load the new files and open tabs offer Reload
+  BUILD: '3.0.12b',          // changes with every update, so browsers load the new files and open tabs offer Reload
   SIGNUP_DOMAIN: 'gankcoenergy.com'
 };
