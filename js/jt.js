@@ -303,10 +303,7 @@ const jtJob = {
         ${j.wells.length ? `<ul class="list">${j.wells.map(w => `<li><div style="flex:1"><div class="name">${esc(w.name)}</div><div class="sub">${esc(w.field || j.field || '')} · ${plural(j.reports.filter(r => r.well_id === w.id).length, 'report')}</div></div>
           ${j.can_write ? `<div class="end"><button class="btn small" data-wedit="${w.id}">Rename</button>${admin ? ` <button class="btn small danger" data-wdel="${w.id}">${ico('trash')}</button>` : ''}</div>` : ''}</li>`).join('')}</ul>`
           : `<div class="empty">Add the first well. Engineers can add the next one as the crew moves.</div>`}</section>
-      <section class="panel"><header><h2>Crew</h2><span class="meta">${plural(j.crew.length, 'person', 'people')}</span>${manage ? `<span class="right"><button class="btn small" id="jt-copy">${ico('copy')}Copy from another job</button><button class="btn small" id="jt-crew">${ico('edit')}Edit crew</button></span>` : ''}</header>
-        ${j.crew.length ? `<ul class="list">${j.crew.map(c => `<li><div style="flex:1"><div class="name">${esc(c.name)}${c.profile_id === j.lead_id ? ' ' + chip('out', 'Lead') : ''}${c.is_hse ? ' ' + chip('ok', 'HSE') : ''}</div><div class="sub">${esc([c.role, c.company !== 'GANKCO' ? c.company : ''].filter(Boolean).join(' · '))}${c.profile_id ? '' : ' · not in Nest'}</div></div></li>`).join('')}</ul>`
-          : '<div class="empty">No crew yet.</div>'}
-        <div class="body muted small">Everyone can look at this job; the people on its crew work on it. Subcontractor crew can be typed in by name. ${j.crew.some(c => c.is_hse) ? `The HSE person fills the HSE Daily Report, which fills the HSE part of each daily report.${j.hse_id ? '' : ' They’re not on Nest, so the lead fills it.'}` : 'Tick the HSE person on board (Edit crew): they fill the HSE Daily Report, which fills the HSE part of each daily report.'}</div></section>
+      ${jtCrewPanel(j, manage)}
       <section class="panel"><header><h2>POB categories</h2><span class="meta">On the HSE report and the daily report</span>${manage ? `<span class="right"><button class="btn small" id="jt-pobcats">${ico('edit')}Change</button></span>` : ''}</header>
         <div class="body"><div class="jt-cats">${(j.pob_cats || []).map(c => `<span class="linebadge">${esc(jtPobLabel(c, j))}</span>`).join(' ')}</div>
         <p class="muted small mt">The HSE person counts the people on board in each of these every day. Up to 7.</p></div></section>
@@ -335,6 +332,7 @@ const jtJob = {
     $$('[data-wdel]', main).forEach(b => b.onclick = async () => { const w = j.wells.find(x => x.id === +b.dataset.wdel); if (!confirm(`Remove ${w.name} from this job?`)) return;
       try { await q(sb.rpc('jt_well_delete', { p_id: w.id })); toast('Well removed'); render({ quiet: true }); } catch (e) { toast(niceError(e), true); } });
     const cr = $('#jt-crew', main); if (cr) cr.onclick = () => jtCrewForm(j);
+    const cc = $('#jt-crewchg', main); if (cc) cc.onclick = () => jtCrewChangeForm(j);
     const cp = $('#jt-copy', main); if (cp) cp.onclick = () => jtCopyForm(j);
     const it = $('#jt-items', main); if (it) it.onclick = () => jtJobItemsForm(j);
     const ol = $('#jt-ownlogos', main); if (ol) ol.onchange = async () => { try { await q(sb.rpc('jt_job_save', { p: { ...j, client_id: j.client_id, own_logos: ol.checked, groups: j.groups } })); render({ quiet: true }); } catch (e) { toast(niceError(e), true); } };
@@ -357,7 +355,7 @@ async function jtCrewForm(j) {
     <input name="company" placeholder="Company" value="${esc(c.company || 'GANKCO')}"><label class="check jt-hsechk" title="The HSE person on board fills the HSE part of each daily report"><input type="checkbox" class="jt-hse" ${c.is_hse ? 'checked' : ''}> HSE</label>
     <button type="button" class="btn small" data-rm title="Remove">${ico('trash')}</button></div>`;
   return modal({ title: 'Crew on ' + j.job_no, wide: true, submit: 'Save crew',
-    sub: 'The people on the crew work on this job’s daily reports and tickets; everyone else can only look. Subcontractor crew can be typed in by name. Tick <b>HSE</b> for the HSE person on board: they fill the HSE Daily Report each day, which fills the HSE part of the daily report, and they’re reminded at 4pm. The lead engineer always stays on.',
+    sub: 'For correcting the list (a name, a role). When people go off or come on, use <b>Crew change</b> so their dates are kept. The people on the crew work on this job’s daily reports and tickets; everyone else can only look. Subcontractor crew can be typed in by name. Tick <b>HSE</b> for the HSE person on board: they fill the HSE Daily Report each day, which fills the HSE part of the daily report, and they’re reminded at 4pm. The lead engineer always stays on.',
     body: `<div id="jt-crewrows">${j.crew.map(row).join('')}</div><button type="button" class="btn small" id="jt-addcrew">${ico('plus')}Add someone</button>`,
     onOpen: d => {
       const wire = () => { $$('[data-rm]', d).forEach(b => b.onclick = () => b.closest('.jt-crewrow').remove());
@@ -642,8 +640,8 @@ const jtReport = {
       const jobId = +params?.get('job');
       if (!jobId) return this.picker();
       const j = this.j = await jtCached('job.' + jobId, () => q(sb.rpc('jt_job_get', { p_id: jobId })));
-      if (!j.can_write) return topbar('New daily report') + `<div class="notice">You’re not on the crew of ${esc(j.job_no)}. Ask an operations manager to add you.</div><a class="btn" href="#/jt/job/${j.id}">Open the job</a>`;
-      const date = params.get('date') || localISO(0);
+      if (!j.can_write && !j.my_off_until) return topbar('New daily report') + `<div class="notice">You’re not on the crew of ${esc(j.job_no)}. Ask an operations manager to add you.</div><a class="btn" href="#/jt/job/${j.id}">Open the job</a>`;
+      const date = params.get('date') || (j.can_write ? localISO(0) : j.my_off_until);
       let wellId = +params.get('well') || (j.reports[0]?.well_id) || j.wells[j.wells.length - 1]?.id || null;
       // an existing report for that well and day opens instead
       const ex = j.reports.find(r => r.well_id === wellId && r.report_date === date);
@@ -684,7 +682,7 @@ const jtReport = {
     const r = this.r, j = this.j;
     return `<div class="jt-rhead"><div><div class="jt-rjob">${esc(j.job_no)} · ${esc(j.client?.short_name || j.client?.name || '')}</div>
       <div class="jt-rmeta">${r.id ? `Report ${r.report_no} · day ${r.report_no} on this well · ` : ''}${r.id ? jtChip(JT_RSTATUS, r.status) : chip('muted', 'New')}${r.submitted_by_name ? ` <span class="sub">sent by ${esc(r.submitted_by_name)} ${fdt(r.submitted_at)}</span>` : ''}${r.reviewed_by_name ? ` <span class="sub">· reviewed by ${esc(r.reviewed_by_name)}</span>` : ''}</div>
-      ${r.id && r.updated_by_name && ['draft', 'returned'].includes(r.status) ? `<div class="jt-upd" id="jt-upd">${ico('clock')}Last updated ${esc(jtLiveHM(r.updated_by_at || r.updated_at))}${jtSameDay(r.updated_by_at || r.updated_at) ? '' : ' on ' + fd(r.updated_by_at || r.updated_at)} by ${esc(r.updated_by_name)}</div>` : ''}</div>
+      ${r.id && r.updated_by_name && ['draft', 'returned'].includes(r.status) ? `<div class="jt-upd" id="jt-upd">${ico('clock')}Last updated ${esc(jtLiveHM(r.updated_by_at || r.updated_at))}${jtSameDay(r.updated_by_at || r.updated_at) ? '' : ' on ' + fd(r.updated_by_at || r.updated_at)} by ${esc(r.updated_by_name)}</div>` : ''}${r.id ? jtCrewOnHtml(r) : ''}</div>
       ${this.mode === 'form' && ['draft', 'returned'].includes(r.status || 'draft') && !S.viewAs ? `<span class="jt-as" id="jt-as" aria-live="polite"></span>` : ''}</div>`;
   },
   // 3.0.11: the HSE part comes from the HSE Daily Report for this well and day
@@ -720,11 +718,12 @@ const jtReport = {
     return topbar(r.id ? `Daily report · ${esc(r.well || '')}` : 'New daily report', jtDay(v.report_date), `<a class="btn" href="#/jt/job/${j.id}">Back to job</a>`) + this.head() +
       `${this.local ? `<div class="notice">This phone has changes that weren’t saved (${fdt(this.local.at)}). They’re shown below. <button type="button" class="btn small" id="jt-discard">Discard them</button></div>` : ''}
       ${r.status === 'returned' && r.return_note ? `<div class="notice bad"><b>Sent back:</b> ${esc(r.return_note)}</div>` : ''}
+      ${!j.can_write && !jtAdmin() && j.my_off_until ? `<div class="notice">You’ve gone off this job’s crew. Until ${fd(new Date(new Date(j.my_off_until + 'T00:00:00').getTime() + 3 * 864e5).toISOString().slice(0, 10))} you can still finish and send your reports for days up to ${fd(j.my_off_until)}.</div>` : ''}
       ${(() => { const w = jtOutbox().find(x => x.key === this.key); return !w ? '' : w.error ? `<div class="notice bad">This report was saved on the phone but couldn’t be sent: ${esc(w.error)} Fix it and press Save again.</div>` : `<div class="notice jt-wait">${ico('clock')} Waiting for signal: this report is saved on the phone and will be sent by itself.</div>`; })()}
       <form id="jt-dor" class="jt-dor" novalidate>
       <section class="panel"><header><h2>Well and date</h2></header><div class="body">
         <div class="row2"><label class="f">Well<select name="well_id" required>${j.wells.map(w => opt(w.id, w.name, v.well_id)).join('')}</select>${j.can_write ? `<span class="hint"><a href="#" id="jt-addwell2">Moved to a new well? Add it</a></span>` : ''}</label>
-        <label class="f">Date<input type="date" name="report_date" value="${esc(v.report_date)}" max="${localISO(1)}" required></label></div>
+        <label class="f">Date<input type="date" name="report_date" value="${esc(v.report_date)}" max="${j.can_write || jtAdmin() ? localISO(1) : (j.my_off_until || localISO(1))}" required></label></div>
         ${others.length ? `<p class="muted small">Also on this day: ${others.map(o => `<a href="#/jt/report/${o.id}">${esc(o.well)}</a>`).join(', ')}</p>` : ''}
         ${!j.wells.length ? '<div class="notice">Add the well first.</div>' : ''}</div></section>
       <section class="panel"><header><h2>Activities</h2><span class="meta" id="jt-tot"></span></header><div class="body">
@@ -1000,6 +999,9 @@ const jtHse = {
       try { if (!navigator.onLine) throw new Error('Failed to fetch'); h = await q(sb.rpc('jt_hse_get', { p_id: null, p_job: jobId, p_well: wellId, p_date: date })); }
       catch (e) { if (!jtNetErr(e)) throw e; const c = jtCacheGet('job.' + jobId); if (!c) throw new Error('There’s no signal, and this job hasn’t been opened on this phone before. Try again when you’re back online.'); h = jtHseOffline(c.v, wellId, date); jtOfflineNote(c.at); }
       if (h.id) { setTimeout(() => go('#/jt/hse/' + h.id), 0); return '<div class="loading">Opening…</div>'; }
+      // 3.0.14: the HSE person who has just gone off finishes the report for their last day
+      if (!h.who && !params.get('date')) { const jj = await jtCached('job.' + jobId, () => q(sb.rpc('jt_job_get', { p_id: jobId }))).catch(() => null);
+        if (jj?.my_off_until && (jj.crew_hist || []).some(c => c.is_hse && c.profile_id === S.profile.id)) { setTimeout(() => go(`#/jt/hse/new?job=${jobId}${wellId ? '&well=' + wellId : ''}&date=${jj.my_off_until}`), 0); return '<div class="loading">Opening…</div>'; } }
       if (!h.who) return topbar('New HSE report') + `<div class="notice">The HSE report for ${esc(h.job.job_no)} is filled by ${esc(h.hse_name || 'the HSE person on the crew')}, the lead engineer or an operations manager.</div><a class="btn" href="#/jt/job/${h.job.id}?t=hse">Open the job</a>`;
       this.h = h; this.key = `nest.jt.hse.new.${h.job.id}`;
     } else {
@@ -1372,6 +1374,9 @@ const jtTicket = {
   },
   async save(silent) { await q(sb.rpc('jt_ticket_save', { p: this.payload() })); this.dirty = false; if (!silent) toast('Saved'); },
   bind(main) {
+    // 3.0.14: the crew on board in the ticket's dates, to check personnel and feeding against
+    if (this.t.kind !== 'reimb' && typeof jtTicketCrewHtml === 'function') jtCached('job.' + this.t.job.id, () => q(sb.rpc('jt_job_get', { p_id: this.t.job.id })))
+      .then(jj => { const h = jtTicketCrewHtml(jj, this.t); const f = $('.pagefoot', main); if (h && f && !$('.jt-tkcrew', main)) f.insertAdjacentHTML('beforebegin', h); }).catch(() => { });
     const t = this.t; this.draw(main);
     $('#tk-pdf', main).onclick = async () => { try { if (this.dirty && t.can_edit) await this.save(true); jtTicketPdfAsk(await q(sb.rpc('jt_ticket_get', { p_id: t.id }))); } catch (e) { toast(niceError(e), true); } };
     const xl = $('#tk-xls', main); if (xl) xl.onclick = async () => { try { if (this.dirty && t.can_edit) await this.save(true); await jtTicketXlsx(await q(sb.rpc('jt_ticket_get', { p_id: t.id }))); } catch (e) { toast(niceError(e), true); } };

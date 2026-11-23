@@ -2223,3 +2223,17 @@ a.rp-bign:hover { color: var(--brand); }
 .pm-chip:not(:has(button)) { padding-right: 12px; }
 .pm-pick { display: grid; gap: 6px; }
 .pm-clash { display: flex; gap: 10px; align-items: flex-start; } .pm-clash svg { width: 18px; height: 18px; flex: none; margin-top: 2px; } .pm-clash div div { margin-top: 3px; }
+
+/* ===================================================================== 3.0.14 JobTrack crew changes */
+.jt-crewp .list li .end.sub { color: var(--muted); font-size: 13px; white-space: nowrap; }
+.jt-crewold .name { color: var(--muted); font-weight: 500; }
+.jt-chglog { display: grid; gap: 8px; border-top: 1px solid #EEF0F2; font-size: 13.5px; }
+.jt-chglog > div { display: flex; gap: 8px; align-items: flex-start; } .jt-chglog svg { width: 15px; height: 15px; flex: none; margin-top: 3px; color: var(--muted); }
+.jt-chglog .sub { display: block; color: var(--muted); font-size: 12.5px; margin-top: 1px; }
+.jt-offs { display: grid; gap: 4px; margin-bottom: 6px; }
+.jt-offrow { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 7px 10px; border: 1px solid var(--line); border-radius: var(--radius-s); margin: 0; }
+.jt-offrow.on { background: #FFF6F2; border-color: #F3C2B3; } .jt-offrow .sub { color: var(--muted); font-size: 13px; }
+.jt-inrow { grid-template-columns: 1.3fr 1.1fr 1.2fr .9fr auto; }
+.jt-crewon { display: flex; gap: 6px; align-items: flex-start; font-size: 13px; color: var(--muted); margin-top: 4px; } .jt-crewon svg { width: 15px; height: 15px; flex: none; margin-top: 2px; }
+.jt-crewon b { color: var(--ink); font-weight: 600; }
+.jt-tkcrew .list .end { font-variant-numeric: tabular-nums; font-weight: 600; white-space: nowrap; }
