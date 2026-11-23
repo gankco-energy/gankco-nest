@@ -85,6 +85,9 @@ ROUTES.job = {
     if (!j) return topbar('Request not found') + '<a class="btn" href="#/jobs">Back to materials requests</a>';
     const moves = j.status !== 'draft' && lines.some(l => l.checkout_id) ? await q(sb.from('movements').select('type,qty,checkout_id,to_status').in('checkout_id', lines.map(l => l.checkout_id).filter(Boolean)).in('type', ['return', 'issue', 'sale', 'lost'])) : [];
     this.ctx = { j, lines, secs, moves, crew, staff };
+    // 3.0.13: the wells on this request (Job planner), and tools another client wants over the same days
+    const pmPanel = typeof pmRequestPanel === 'function' ? await pmRequestPanel(j).catch(() => '') : '';
+    const clashes = this.ctx.clashes = ['draft', 'submitted', 'partial'].includes(j.status) && typeof requestClashes === 'function' ? await requestClashes(j, lines).catch(() => []) : [];
     const crewCan = !readOnly() && j.status !== 'cancelled' && (isSuper() || j.requester_id === S.profile.id || j.created_by === S.profile.id || lines.some(l => canAdmin(l.items?.department_id)) || secs.some(s => canAdmin(s.department_id)));
     this.crewCan = crewCan;
     const draft = j.status === 'draft';
@@ -129,7 +132,9 @@ ROUTES.job = {
       ${draft ? `<div class="notice">Draft: nothing has left the store. Add the items, then press <b>Submit request</b>. Each service line’s main or backup admin approves and issues its own items${isSuper() ? ' (as the Developer, yours are issued as soon as you submit)' : ''}.</div>` : ''}
       ${j.status === 'partial' ? `<div class="notice">Partly issued: some service lines have issued their items; others are still waiting for their admin.${isRequester ? ' You can confirm receipt once every line has been issued or rejected.' : ''}</div>` : ''}
       ${canConfirm ? `<div class="notice">You’re the requester. Check the items you were given against the list, then press <b>Confirm receipt</b> to sign the Requester box on the Load-out Manifest.</div>` : ''}
+      ${typeof requestClashHtml === 'function' ? requestClashHtml(clashes) : ''}
       ${crewPanel(j, crew, staff, crewCan)}
+      ${pmPanel}
       ${lines.length ? lineIds.map(section).join('') : `<section class="panel"><div class="empty">No items yet. Press <b>Add items</b> and search or scan what’s needed. You can also tick items on the Inventory page and choose <b>Add to materials request</b>.</div></section>`}
       ${j.notes ? `<section class="panel"><div class="body">${esc(j.notes)}</div></section>` : ''}
       ${isSuper() && !S.viewAs ? `<div class="po-danger dev"><button class="btn small link danger" id="dev-rev">${ico('undo')}Reverse &amp; remove this request</button><span class="sub">Developer only. Undoes everything it did to stock and removes it from every list. A full copy stays in the audit log.</span></div>` : ''}`;
@@ -146,7 +151,7 @@ ROUTES.job = {
       const ds = [...new Set(lines.map(l => l.items?.department_id))];
       return modal({ title: `Submit ${j.job_no}`, submit: 'Submit request',
         sub: `${plural(lines.length, 'item')} for ${esc(j.title)}, requested by ${esc(j.requester_name || '')}.`,
-        body: `<ul class="steps">${ds.map(d => `<li><b>${esc(lineName(d))}</b>: ${isSuper() ? 'issued straight away (you’re the Developer)' : 'sent to this line’s main or backup admin to approve &amp; issue'}</li>`).join('')}</ul>`,
+        body: `<ul class="steps">${ds.map(d => `<li><b>${esc(lineName(d))}</b>: ${isSuper() ? 'issued straight away (you’re the Developer)' : 'sent to this line’s main or backup admin to approve &amp; issue'}</li>`).join('')}</ul>${(this.ctx.clashes || []).length ? requestClashHtml(this.ctx.clashes) : ''}`,
         onSubmit: async () => { const st = await q(sb.rpc('submit_request', { p_job: j.id })); toast(st === 'out' ? `${j.job_no} issued` : `${j.job_no} submitted`); refresh(); } });
     };
     $$('[data-issue]', main).forEach(x => x.onclick = () => {
@@ -174,6 +179,7 @@ ROUTES.job = {
     };
     if (b('#manifest')) b('#manifest').onclick = () => jobManifest(j, lines, this.ctx.moves, secs, this.ctx.crew, this.ctx.staff);
     if (b('#crew')) b('#crew').onclick = () => editCrew(j, this.ctx.crew, this.ctx.staff);
+    if (typeof bindPmRequestPanel === 'function') bindPmRequestPanel(main);
     $$('[data-del]', main).forEach(x => x.onclick = async () => { try { await q(sb.from('job_lines').delete().eq('id', +x.dataset.del)); render({ quiet: true }); } catch (e) { toast(niceError(e), true); } });
   }
 };

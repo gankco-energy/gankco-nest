@@ -1,4 +1,4 @@
-# GANKCO Nest: version 3.0.12 (JobTrack Live, reports that save themselves, ticket PDFs with receipts, and Operation Records)
+# GANKCO Nest: version 3.0.13 (one materials request for several wells, and tool clashes in the Job planner)
 
 *Built to support engineered solutions.*
 
@@ -8,6 +8,29 @@
 - **Database and sign-in:** Supabase project in the **GANKCO Energy Services** organization (Nest Gmail; Ehis also an Owner).
 - **Emails:** sent by Brevo from **nest-alerts@gankcoenergy.com** as "GANKCO Nest". Sign-in emails use Supabase's custom SMTP (templates in Supabase → Authentication → Emails → Templates). Alert emails use the Brevo API key saved in Supabase Vault as `brevo_api_key`, on a schedule (pg_cron).
 - **DNS (company IT):** `nest` CNAME → `gankco-energy.github.io`, plus the Brevo verification records.
+
+## Install 3.0.13 (about 2 minutes)
+
+3.0.12 must already be installed.
+
+1. **Supabase → SQL Editor:** open a **New query**, paste the whole of **`29-nest-v3.0.13-upgrade.sql`**, press **Run**. It ends with **Nest 3.0.13 installed**. It is all-or-nothing and safe to run again.
+2. **GitHub:** unzip **`gankco-nest-v3.0.13.zip`** and upload everything into **github.com/gankco-energy/gankco-nest**, then commit. Keep the `CNAME` file. (New file: `js/plan-merge.js`.)
+3. Reload Nest (**Ctrl + Shift + R**). The footer says **v3.0.13**.
+
+### What's new in 3.0.13
+- **One materials request for several wells** (Job planner):
+  - tick the planned jobs (wells) of one client and press **One materials request for these**. Wells of other clients can't be ticked at the same time;
+  - tools that come back (EMST, setting sleeves, extension rods, adapter kits, retrieving tools) go on it **once per size**, because the wells are done one after another. Packers, crossovers, screens, blanks and the rest are **added up**;
+  - a tool this client already has on another open request (out on a job, or asked for) is left off, and the summary says which request has it;
+  - the Request button on a single well now offers to add it to an open draft of the same client.
+- **The request page shows its wells**:
+  - **Add a planned job** adds only what the request doesn't already have (no second EMST of a size it carries);
+  - taking a well off (the × on it) removes its screens, blanks and parts; a tool stays while another well on the request needs that size;
+  - **Merge with another draft** (same client): a tool both have is kept once, everything else is added up; the other draft is cancelled and points to this one;
+  - while a request waits for approval and no service line has acted on it yet, adding or taking off a well sends it back to draft. Send it again afterwards.
+- **Tool clashes:**
+  - the Job planner warns when planned jobs of **different clients**, 14 days apart or closer, need a tool size you have too few of (on the shelf plus out on jobs). The jobs are marked **Tool clash**;
+  - a request shows the same warning (and so does the Submit box) when another client's open request wants the same tool over the same days.
 
 ## Install 3.0.12 (about 20 minutes, most of it the one-time Google setup)
 

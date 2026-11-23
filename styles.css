@@ -2204,3 +2204,22 @@ a.rp-bign:hover { color: var(--brand); }
 }
 .rec-ft.long { font-size: 9px; letter-spacing: 0; }
 .rec-nopv { display: flex; flex-direction: column; align-items: center; gap: 8px; } .rec-nopv .rec-ft { width: 46px; height: 46px; font-size: 13px; } .rec-nopv span { color: var(--muted); }
+
+/* ===================================================================== 3.0.13 one materials request for several wells */
+.pm-ckh, .pm-ck { width: 34px; padding-right: 0 !important; } .pm-ck input { width: 17px; height: 17px; margin: 0; }
+.pljobs tr.pm-off td { opacity: .45; }
+.pm-hint { margin: -4px 0 10px; }
+.pm-bar { position: sticky; bottom: 12px; z-index: 6; display: flex; gap: 10px; align-items: center; flex-wrap: wrap; background: var(--gunmetal); color: #fff; border-radius: var(--radius-m); padding: 10px 14px; margin-top: 12px; box-shadow: 0 6px 20px rgba(0,0,0,.18); }
+.pm-bar b { font-weight: 600; } .pm-bar #pm-cl { color: #C9D2D9; } .pm-bar .btn:not(.tagbtn) { background: #fff; }
+.pm-box { border: 1px solid var(--line); border-radius: var(--radius-s); overflow: hidden; margin-bottom: 10px; }
+.pm-sec { font-size: 12px; font-weight: 600; color: var(--muted); background: #FAFAFB; padding: 7px 12px; border-bottom: 1px solid #EEF0F2; }
+.pm-row { display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr) 48px; gap: 10px; align-items: center; padding: 8px 12px; border-bottom: 1px solid #EEF0F2; font-size: 14px; }
+.pm-row:last-child { border-bottom: 0; } .pm-row b { text-align: right; font-variant-numeric: tabular-nums; } .pm-row .sub { color: var(--muted); font-size: 12.5px; }
+.pm-chips { display: flex; flex-wrap: wrap; gap: 8px; }
+.pm-chip { display: inline-flex; align-items: center; gap: 6px; background: var(--out-bg); color: var(--out); border-radius: 16px; padding: 4px 6px 4px 12px; font-weight: 600; font-size: 14px; }
+.pm-chip .sub { font-weight: 400; color: var(--out); opacity: .85; font-size: 12.5px; }
+.pm-chip button { border: 0; background: transparent; color: var(--out); cursor: pointer; display: grid; place-items: center; width: 22px; height: 22px; border-radius: 50%; padding: 0; }
+.pm-chip button:hover { background: rgba(34,87,201,.14); } .pm-chip button svg { width: 14px; height: 14px; }
+.pm-chip:not(:has(button)) { padding-right: 12px; }
+.pm-pick { display: grid; gap: 6px; }
+.pm-clash { display: flex; gap: 10px; align-items: flex-start; } .pm-clash svg { width: 18px; height: 18px; flex: none; margin-top: 2px; } .pm-clash div div { margin-top: 3px; }

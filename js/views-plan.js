@@ -161,6 +161,8 @@ ROUTES.planner = {
   async load(parts, params) {
     if (params.get('tab')) PL.tab = params.get('tab');
     const P = await planData(true); const E = planEngine(P); this.ctx = { P, E }; savePlanSnapshot(E);
+    // 3.0.13: the same tool size needed by different clients at the same time, with too few of it
+    this.clash = PL.tab === 'jobs' && typeof planClashes === 'function' ? planClashes(E, await pmOwned()) : [];
     const cfg = planCfg(); const k = E.kpi;
     const tabs = [['jobs', 'Upcoming jobs'], ['summary', 'Summary'], ['shipin', 'Ship-in list'], ...(canEditPlan() ? [['setup', 'Setup']] : [])];
     if (!tabs.some(t => t[0] === PL.tab)) PL.tab = 'jobs';
@@ -182,21 +184,26 @@ ROUTES.planner = {
     const V = { active: j => jobEff(j) === 'planned', hold: j => jobEff(j) === 'hold', run: j => jobEff(j) === 'run', all: j => jobEff(j) !== 'cancelled' };
     const list = P.jobs.filter(V[PL.view] || V.active).sort((a, b) => (a.planned_on || '').localeCompare(b.planned_on || '') || a.id - b.id);
     const me = S.viewAs ? null : S.profile.id;
-    return `<div class="filters"><div class="seg" id="pl-view">${[['active', 'Active'], ['hold', 'On hold'], ['run', 'Run'], ['all', 'All']].map(([v, l]) => `<button data-v="${v}" class="${PL.view === v ? 'on' : ''}">${l}</button>`).join('')}</div>
+    const clash = this.clash || []; const clashIds = new Set(clash.flatMap(c => c.jobs));
+    const pick = j => canRequest() && !j.mr && jobEff(j) === 'planned';
+    const anyPick = list.some(pick);
+    return `${clash.map(c => `<div class="notice bad pm-clash">${ico('bell')}<div><b>Tool clash</b> · ${esc(pmClashText(c))}</div></div>`).join('')}
+      <div class="filters"><div class="seg" id="pl-view">${[['active', 'Active'], ['hold', 'On hold'], ['run', 'Run'], ['all', 'All']].map(([v, l]) => `<button data-v="${v}" class="${PL.view === v ? 'on' : ''}">${l}</button>`).join('')}</div>
       <span class="muted">Jobs are checked in date order: earlier jobs get the stock first.</span></div>
-      <section class="panel"><div class="tablewrap"><table class="t stack pljobs"><thead><tr><th>Month</th><th>Well</th><th>Tubing</th><th>BHA</th><th>Stock check</th><th></th></tr></thead><tbody>
+      ${anyPick ? '<p class="muted small pm-hint">Tick the wells of one client to put them on one materials request: tools that come back go on it once per size, everything else is added up.</p>' : ''}
+      <section class="panel"><div class="tablewrap"><table class="t stack pljobs"><thead><tr>${anyPick ? '<th class="pm-ckh"></th>' : ''}<th>Month</th><th>Well</th><th>Tubing</th><th>BHA</th><th>Stock check</th><th></th></tr></thead><tbody>
       ${list.length ? list.map(j => { const r = E.results.get(j.id); const eff = jobEff(j);
         const badge = eff !== 'planned' ? chip(...PLAN_STATUS[eff]) : r?.ok ? chip('ok', 'Ready') : chip('overdue', `Short ${plural(r.short.length, 'part')}`);
         const detail = eff === 'planned' ? (r?.ok ? 'Can be done from the shelf' : r.short.map(x => `${fq(x.missing)} × ${partName(x.part)}${x.size !== j.tubing_size ? ` (${x.size})` : ''}${x.reason !== 'Not enough on the shelf' ? ` · ${x.reason === 'Not carried' ? 'not carried' : 'no Nest item linked'}` : ''}`).join(', '))
           : eff === 'run' ? 'Run: no longer counted' : eff === 'hold' ? 'On hold: not counted' : 'Cancelled';
-        return `<tr class="${eff === 'planned' && !r?.ok ? 'is-short' : ''}"><td class="nowrap">${fmonthD(j.planned_on)}</td>
+        return `<tr class="${eff === 'planned' && !r?.ok ? 'is-short' : ''}">${anyPick ? `<td class="pm-ck">${pick(j) ? `<input type="checkbox" data-pmsel="${j.id}" aria-label="Choose ${esc(j.title)}">` : ''}</td>` : ''}<td class="nowrap">${fmonthD(j.planned_on)}</td>
           <td class="full"><div class="name">${esc(j.title)}</div><div class="sub">${esc(j.customer || '')}</div></td>
           <td class="nowrap"><b>${esc(j.tubing_size)}</b><div class="sub">${esc(j.setting_tool)}</div></td>
           <td class="sub">${esc(bhaText(j).replace(/ · (EMST|TTS)$/, '').replace(/^(EMST|TTS)$/, '—'))}</td>
-          <td class="plchk">${badge}<div class="sub ${eff === 'planned' && !r?.ok ? 'neg' : ''}">${esc(detail)}</div>
+          <td class="plchk">${badge}${clashIds.has(j.id) ? ' ' + chip('overdue', 'Tool clash') : ''}<div class="sub ${eff === 'planned' && !r?.ok ? 'neg' : ''}">${esc(detail)}</div>
             ${j.mr ? `<div class="sub"><a href="#/job/${j.mr.id}">${esc(j.mr.job_no)}</a> · ${esc((JOB_STATUS[j.mr.status] || [0, j.mr.status])[1])}</div>` : j.mr_note ? `<div class="sub muted">${esc(j.mr_note)}: make a new request when ready</div>` : ''}</td>
           <td class="num nowrap">${isWriter() ? `<div class="btngrp"><button class="btn small" data-edit="${j.id}">${ico('sign')}Edit</button>${!j.mr && eff === 'planned' && canRequest() ? `<button class="btn small" data-mr="${j.id}">${ico('truck')}Request</button>` : ''}${(j.created_by === me || isAdmin()) ? `<button class="btn small" data-del="${j.id}" aria-label="Delete" title="Delete">${ico('trash')}</button>` : ''}</div>` : ''}</td></tr>`; }).join('')
-        : `<tr><td colspan="6" class="empty">${PL.view === 'active' ? 'No upcoming jobs. Press <b>Add upcoming job</b> to check one against the shelf.' : 'Nothing here.'}</td></tr>`}</tbody></table></div></section>`;
+        : `<tr><td colspan="${anyPick ? 7 : 6}" class="empty">${PL.view === 'active' ? 'No upcoming jobs. Press <b>Add upcoming job</b> to check one against the shelf.' : 'Nothing here.'}</td></tr>`}</tbody></table></div></section>`;
   },
   summary(P, E) {
     const cfg = planCfg(); const sizes = cfg.sizes || [];
@@ -263,7 +270,19 @@ ROUTES.planner = {
     $('#pl-pdf', main).onclick = () => planReport('pdf').catch(e => { console.error(e); toast(niceError(e), true); });
     $('#pl-xls', main).onclick = () => planReport('xlsx').catch(e => { console.error(e); toast(niceError(e), true); });
     $$('[data-edit]', main).forEach(b => b.onclick = () => editPlanJob(P.jobs.find(j => j.id === +b.dataset.edit)));
-    $$('[data-mr]', main).forEach(b => b.onclick = () => planToRequest(P.jobs.find(j => j.id === +b.dataset.mr)));
+    $$('[data-mr]', main).forEach(b => b.onclick = () => planMergeRequest([P.jobs.find(j => j.id === +b.dataset.mr)]));
+    // 3.0.13: tick the wells of one client, then one request for them all
+    const boxes = $$('[data-pmsel]', main);
+    if (boxes.length) {
+      main.insertAdjacentHTML('beforeend', `<div class="pm-bar" id="pm-bar" hidden><b id="pm-n"></b><span id="pm-cl"></span><span class="jt-sp"></span><button class="btn small" id="pm-clr">Clear</button><button class="btn small tagbtn" id="pm-go">${ico('truck')}One materials request for these</button></div>`);
+      const sel = () => boxes.filter(c => c.checked).map(c => P.jobs.find(j => j.id === +c.dataset.pmsel));
+      const sync = () => { const s = sel(); const cl = s[0]?.customer;
+        boxes.forEach(c => { const j = P.jobs.find(x => x.id === +c.dataset.pmsel); const off = s.length && !sameClient(j.customer, cl); c.disabled = off; c.closest('tr').classList.toggle('pm-off', off); c.title = off ? 'Another client: only wells of one client can share a request' : ''; });
+        $('#pm-bar', main).hidden = !s.length; $('#pm-n', main).textContent = `${plural(s.length, 'job')} selected`; $('#pm-cl', main).textContent = s.length ? ' · ' + (cl || 'No client') : ''; };
+      boxes.forEach(c => c.onchange = sync);
+      $('#pm-clr', main).onclick = () => { boxes.forEach(c => { c.checked = false; }); sync(); };
+      $('#pm-go', main).onclick = () => planMergeRequest(sel());
+    }
     $$('[data-del]', main).forEach(b => b.onclick = async () => {
       const j = P.jobs.find(x => x.id === +b.dataset.del); if (!confirm(`Delete ${j.title} from the planner?`)) return;
       try { await q(sb.from('plan_jobs').delete().eq('id', j.id)); toast('Deleted'); render({ quiet: true }); } catch (e) { toast(niceError(e), true); }
