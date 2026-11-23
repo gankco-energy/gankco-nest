@@ -7,20 +7,31 @@ const sameClient = (a, b) => String(a || '').trim().toLowerCase() === String(b |
 const PM_WINDOW = 14;   // planned jobs this many days apart or closer count as at the same time (for clashes)
 const pmDays = (a, b) => Math.abs((new Date(a + 'T00:00:00') - new Date(b + 'T00:00:00')) / 864e5);
 
-// what a set of planned jobs needs: part × size → quantity, and which wells it's for
+// one tool for several tubing sizes: sizes with the same shared stock name, or linked to the same Nest item(s)
+// (e.g. the 2.125" EMST used for both 2-7/8" and 3-1/2" tubing)
+function pmToolKey(E, part, size) {
+  const l = E.linkOf(part.id, size); const ids = (l?.item_ids || []).map(Number).sort((a, b) => a - b);
+  return l?.pool ? 'pool:' + l.pool.trim().toLowerCase() : ids.length ? 'items:' + ids.join(',') : 'size:' + size;
+}
+// what a set of planned jobs needs: part × size → quantity, and which wells it's for (a tool once, however many sizes use it)
 function planDemand(E, jobs) {
   const m = new Map();
   for (const j of jobs) {
     const r = E.results.get(j.id); if (!r) continue;
     for (const ln of r.lines) {
-      const svc = ln.part.kind === 'service'; const k = ln.part.id + '|' + ln.size; const q = svc ? 1 : +ln.qty || 0;
+      const svc = ln.part.kind === 'service'; const q = svc ? 1 : +ln.qty || 0;
       if (!q) continue;
-      const x = m.get(k) || m.set(k, { k, part: ln.part, size: ln.size, svc, qty: 0, wells: [] }).get(k);
+      const k = svc ? 'svc|' + ln.part.id + '|' + pmToolKey(E, ln.part, ln.size) : ln.part.id + '|' + ln.size;
+      // a tool shared by sizes: link from a size that is linked to items, if any
+      const x = m.get(k) || m.set(k, { k, part: ln.part, size: ln.size, sizes: [], svc, qty: 0, wells: [] }).get(k);
+      if (!x.sizes.includes(ln.size)) x.sizes.push(ln.size);
+      if (svc && !(E.linkOf(ln.part.id, x.size)?.item_ids || []).length && (E.linkOf(ln.part.id, ln.size)?.item_ids || []).length) x.size = ln.size;
       x.qty = svc ? 1 : x.qty + q; x.wells.push({ title: j.title, qty: q });
     }
   }
   return m;
 }
+const pmSizes = d => (d.sizes && d.sizes.length ? d.sizes : [d.size]).join(' / ');
 // other open requests of this client: which of their items each one holds (a tool already out, or already asked for)
 async function pmClientHolds(client, exceptId) {
   const rows = await q(sb.from('jobs').select('id,job_no,status,client,job_lines(item_id,qty,checkouts(closed_at))').in('status', ['draft', 'submitted', 'partial', 'out']));
@@ -68,7 +79,7 @@ async function planMergeRequest(jobs) {
   const demand = planDemand(E, jobs); const pick = pmPick(E, demand, held);
   const lines = pmMergeRows(pick.rows);
   const tools = [...demand.values()].filter(d => d.svc), rest = [...demand.values()].filter(d => !d.svc);
-  const row = (d, extra = '') => `<div class="pm-row"><span>${esc(partName(d.part))} <span class="sub">${esc(d.size)}</span></span><span class="sub">${d.svc ? esc(d.wells.map(w => w.title).join(', ')) : esc(d.wells.map(w => fq(w.qty)).join(' + '))}</span><b>${fq(d.qty)}</b>${extra}</div>`;
+  const row = (d, extra = '') => `<div class="pm-row"><span>${esc(partName(d.part))} <span class="sub">${esc(pmSizes(d))}</span></span><span class="sub">${d.svc ? esc(d.wells.map(w => w.title).join(', ')) : esc(d.wells.map(w => fq(w.qty)).join(' + '))}</span><b>${fq(d.qty)}</b>${extra}</div>`;
   const locCount = {}; lines.forEach(x => locCount[x.location_id] = (locCount[x.location_id] || 0) + 1);
   const base = +Object.entries(locCount).sort((a, b) => b[1] - a[1])[0]?.[0] || realLocs()[0]?.id;
   return modal({ title: jobs.length > 1 ? `One materials request for ${plural(jobs.length, 'job')}` : `Materials request for ${jobs[0].title}`, wide: true, submit: 'Create draft request',
@@ -76,8 +87,8 @@ async function planMergeRequest(jobs) {
     body: `${drafts.length ? `<label class="f">Put them on<select name="to"><option value="new">A new request</option>${drafts.map(d => opt(d.id, `${d.job_no} (draft for ${client})`)).join('')}</select><span class="hint">Adding to a draft adds only what the draft doesn’t already have: a tool size it already carries isn’t added again.</span></label>` : ''}
       <div class="pm-box">${pmLines('Tools that come back · one per size', tools, d => row(d))}
       ${pmLines('Used up or left in the well · added up', rest, d => row(d))}</div>
-      ${pick.leftOff.length ? `<div class="notice">${ico('check')} Left off, already on another request for ${esc(client)}: ${pick.leftOff.map(x => `${esc(partName(x.d.part))} ${esc(x.d.size)} on <b>${esc(x.req.job_no)}</b>${x.req.status === 'draft' ? ' (draft)' : ''}`).join('; ')}.</div>` : ''}
-      ${pick.missing.length ? `<div class="notice bad">Not on the shelf, so not added: ${pick.missing.map(x => `${fq(x.n)} × ${esc(partName(x.d.part))} (${esc(x.d.size)})`).join(', ')}.</div>` : ''}
+      ${pick.leftOff.length ? `<div class="notice">${ico('check')} Left off, already on another request for ${esc(client)}: ${pick.leftOff.map(x => `${esc(partName(x.d.part))} ${esc(pmSizes(x.d))} on <b>${esc(x.req.job_no)}</b>${x.req.status === 'draft' ? ' (draft)' : ''}`).join('; ')}.</div>` : ''}
+      ${pick.missing.length ? `<div class="notice bad">Not on the shelf, so not added: ${pick.missing.map(x => `${fq(x.n)} × ${esc(partName(x.d.part))} (${esc(pmSizes(x.d))})`).join(', ')}.${pick.missing.some(x => x.d.svc) && canEditPlan() ? ' If a tool is the same one used for another size, link that size to the same Nest item in Job planner → Setup.' : ''}</div>` : ''}
       <p class="muted small">${plural(lines.length, 'line')} ready${lines.length ? `, leaving from ${esc(locName(base))}` : ''}.</p>`,
     onSubmit: async x => {
       if (x.to && x.to !== 'new') { await pmAddJobs(+x.to, jobs.map(j => j.id)); return; }
@@ -126,7 +137,7 @@ async function pmApplyChange(reqId, beforeIds, afterIds) {
   }
   return pick;
 }
-const pmDone = (pick, what) => toast(`${what}${pick.missing.length ? ` · not on the shelf: ${pick.missing.map(x => `${fq(x.n)} × ${partName(x.d.part)} (${x.d.size})`).join(', ')}` : ''}${pick.leftOff.length ? ` · left off, already on ${[...new Set(pick.leftOff.map(x => x.req.job_no))].join(', ')}` : ''}`, !!pick.missing.length);
+const pmDone = (pick, what) => toast(`${what}${pick.missing.length ? ` · not on the shelf: ${pick.missing.map(x => `${fq(x.n)} × ${partName(x.d.part)} (${pmSizes(x.d)})`).join(', ')}` : ''}${pick.leftOff.length ? ` · left off, already on ${[...new Set(pick.leftOff.map(x => x.req.job_no))].join(', ')}` : ''}`, !!pick.missing.length);
 async function pmAddJobs(reqId, ids) {
   const cur = (await q(sb.from('plan_jobs').select('id').eq('mr_id', reqId))).map(x => x.id);
   const pick = await pmApplyChange(reqId, cur, [...cur, ...ids]);
