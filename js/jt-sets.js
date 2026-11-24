@@ -170,7 +170,7 @@ const jtSetsPage = {
       `<section class="panel">${sets.length ? `<ul class="list">${sets.map(s => { const g = jtSetGroups(s); const hid = (s.items || []).filter(x => x.cat_id && S.jt.items.some(i => i.id === +x.cat_id && !i.active)).length;
         return `<li class="clickrow" data-set="${s.id}"><div style="flex:1;min-width:0"><div class="name">${esc(s.name)}</div>
           <div class="sub">${plural((s.items || []).length, 'item')}${g.length ? ' · equipment groups: ' + esc(g.join(', ')) : ''}${s.note ? ' · ' + esc(s.note) : ''}</div>
-          <div class="sub muted">Changed ${esc(fd(s.updated_at))}${s.updated_by_name ? ' by ' + esc(s.updated_by_name) : ''}${hid ? ` · <span class="jt-warn">${plural(hid, 'item')} no longer on the ticket items list</span>` : ''}</div></div>${ico('next')}</li>`; }).join('')}</ul>`
+          <div class="sub muted">Changed ${esc(fd(s.updated_at))}${s.updated_by_name ? ' by ' + esc(s.updated_by_name) : ''}${hid ? ` · <span class="jt-warn">${plural(hid, 'item')} no longer on the ticket items list</span>` : ''}</div></div><span class="jt-setgo">${ico('next')}</span></li>`; }).join('')}</ul>`
         : `<div class="empty body"><b>Make your first set</b><br>Press <b>New set</b>, or open a job, choose its items and press <b>Save as a set</b>.</div>`}</section>`;
   },
   bind(main) {
