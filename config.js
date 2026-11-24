@@ -9,7 +9,7 @@ window.APP_CONFIG = {
   COMPANY: 'GANKCO Energy Services Limited',
   TAGLINE: 'Built to support engineered solutions',
   MOTTO: 'Providing engineered solutions',
-  VERSION: '3.0.14',
-  BUILD: '3.0.14',          // changes with every update, so browsers load the new files and open tabs offer Reload
+  VERSION: '3.0.15',
+  BUILD: '3.0.15',          // changes with every update, so browsers load the new files and open tabs offer Reload
   SIGNUP_DOMAIN: 'gankcoenergy.com'
 };

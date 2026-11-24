@@ -32,8 +32,9 @@ const jtNaira = v => '₦' + (+v || 0).toLocaleString('en-US', { minimumFraction
 
 async function jtLoad(force) {
   if (!force && S.jt.at && Date.now() - S.jt.at < 60000) return S.jt;
-  const [cfg, clients, items] = await jtCached('base', () => Promise.all([q(sb.rpc('jt_cfg')), q(sb.from('jt_clients').select('*').order('name')), q(sb.from('jt_items').select('*').order('sort').order('id'))]));
-  Object.assign(S.jt, { cfg, clients, items, at: Date.now() });
+  const [cfg, clients, items, sets] = await jtCached('base', () => Promise.all([q(sb.rpc('jt_cfg')), q(sb.from('jt_clients').select('*').order('name')), q(sb.from('jt_items').select('*').order('sort').order('id')),
+    q(sb.from('jt_item_sets').select('*').order('name')).catch(() => [])]));
+  Object.assign(S.jt, { cfg, clients, items, sets: sets || [], at: Date.now() });
   jtFlush(); jtMenuRefresh();
   return S.jt;
 }
@@ -51,7 +52,7 @@ function jtMenuRefresh() {
 function jtNav() {
   const main = [['jt', 'Overview', 'home'], ['jt/live', 'Live', 'live'], ['jt/jobs', 'Jobs', 'derrick'], ...(jtWriter() ? [['jt/report/new', 'New daily report', 'plus']] : []),
     ...(jtHseWriter() ? [['jt/hse/new', 'New HSE report', 'cert']] : []), ['jt/items', 'Ticket items', 'label']];
-  const setup = [...(jtAdmin() || isSuper() ? [['jt/clients', 'Clients', 'building'], ['jt/settings', 'JobTrack settings', 'gear']] : []), ...(isSuper() ? [['team', 'Nest admin', 'users']] : [])];
+  const setup = [...(jtAdmin() || isSuper() ? [['jt/clients', 'Clients', 'building'], ['jt/sets', 'Item sets', 'kit'], ['jt/settings', 'JobTrack settings', 'gear']] : []), ...(isSuper() ? [['team', 'Nest admin', 'users']] : [])];
   return { main, setup };
 }
 const jtNavKey = parts => !parts[1] ? 'jt' : ['job', 'ticket'].includes(parts[1]) ? 'jt/jobs' : parts[1] === 'report' ? (parts[2] === 'new' ? 'jt/report/new' : 'jt/jobs')
@@ -84,7 +85,7 @@ ROUTES.jt = {
     await jtLoad();
     const p1 = parts[1];
     this.page = !p1 ? jtOverview : p1 === 'jobs' ? jtJobs : p1 === 'job' ? jtJob : p1 === 'report' ? jtReport : p1 === 'hse' ? jtHse : p1 === 'ticket' ? jtTicket
-      : p1 === 'live' ? jtLive : p1 === 'items' ? jtItemsPage : p1 === 'clients' ? jtClientsPage : p1 === 'settings' ? jtSettingsPage : jtOverview;
+      : p1 === 'live' ? jtLive : p1 === 'items' ? jtItemsPage : p1 === 'clients' ? jtClientsPage : p1 === 'sets' ? jtSetsPage : p1 === 'settings' ? jtSettingsPage : jtOverview;
     return this.page.load(parts, params);
   },
   bind(main, parts, params) { if (jtRole() && this.page) this.page.bind(main, parts, params); }
@@ -200,8 +201,10 @@ async function jtJobForm(j) {
       <div class="row3"><label class="f">Rig name<input name="rig_name" value="${esc(j?.rig_name || 'N/A')}"></label><label class="f">Rig owner<input name="rig_owner" value="${esc(j?.rig_owner || 'N/A')}"></label><label class="f">Rig type<input name="rig_type" value="${esc(j?.rig_type || 'N/A')}"></label></div>
       <div class="row3"><label class="f">Mobilisation date<input type="date" name="mob_date" value="${esc(j?.mob_date || '')}"></label><label class="f">Demobilisation date<input type="date" name="demob_date" value="${esc(j?.demob_date || '')}"></label>
         <label class="f">Status<select name="status">${Object.entries(JT_STATUS).filter(([k]) => k !== 'closed' || admin).map(([k, v]) => opt(k, v[1], j?.status || 'planned')).join('')}</select></label></div>
-      ${!j && others.length ? `<label class="f">Copy crew and ticket items from<select name="copy_from"><option value="">Don’t copy</option>${others.map(o => opt(o.id, [o.job_no, o.project, o.field].filter(Boolean).join(' · '), '')).join('')}</select>
-        <span class="hint">Saves typing the same team and items again. You can change them after.</span></label>` : ''}
+      ${!j && (others.length || jtSetsList().length) ? `<label class="f">Start from<select name="start_from"><option value="">Nothing: I’ll choose the items on the job page</option>
+          ${jtSetsList().length ? `<optgroup label="An item set (ticket items)">${jtSetsList().map(s => opt('s' + s.id, `${s.name} (${plural((s.items || []).length, 'item')})`, '')).join('')}</optgroup>` : ''}
+          ${others.length ? `<optgroup label="A past job (crew and ticket items)">${others.map(o => opt('j' + o.id, [o.job_no, o.project, o.field].filter(Boolean).join(' · '), '')).join('')}</optgroup>` : ''}</select>
+        <span class="hint">Saves typing the same items${others.length ? ' (and team)' : ''} again. You can change them after.</span></label>` : ''}
       <label class="f">Notes<textarea name="notes" rows="2">${esc(j?.notes || '')}</textarea></label>`,
     onOpen: d => { const sel = $('[name=client_id]', d), nc = $('[name=new_client]', d); sel.onchange = () => { nc.hidden = sel.value !== '__new'; if (!nc.hidden) nc.focus(); }; },
     onSubmit: async x => {
@@ -211,11 +214,15 @@ async function jtJobForm(j) {
         if (!x.new_client?.trim()) throw new Error('Type the new client’s name.');
         x.client_id = await q(sb.rpc('jt_client_save', { p: { name: x.new_client.trim() } })); await jtLoad(true);
       }
-      const p = { ...x, id: j?.id || null, groups: gs, own_logos: j?.own_logos }; delete p.new_client; delete p.copy_from;
+      const p = { ...x, id: j?.id || null, groups: gs, own_logos: j?.own_logos }; delete p.new_client; delete p.start_from;
       if (!admin) p.lead_id = j ? j.lead_id : S.profile.id;
       const id = await q(sb.rpc('jt_job_save', { p }));
-      if (!j && x.copy_from) {
-        try { const c = await q(sb.rpc('jt_job_copy', { p_job: id, p_from: +x.copy_from, p_crew: true, p_items: true }));
+      const from = !j && x.start_from ? { kind: x.start_from[0], id: +x.start_from.slice(1) } : null;
+      if (from?.kind === 's') {
+        try { const r = await q(sb.rpc('jt_job_add_set', { p_job: id, p_set: from.id })); toast('Job created. ' + jtSetSummary(r)); }
+        catch (e) { toast('Job created, but the set wasn’t added: ' + niceError(e), true); }
+      } else if (from?.kind === 'j') {
+        try { const c = await q(sb.rpc('jt_job_copy', { p_job: id, p_from: from.id, p_crew: true, p_items: true }));
           toast(`Job created. Copied ${plural(c.crew, 'person', 'people')} and ${plural(c.items, 'ticket item')}${c.skipped ? ` (${plural(c.skipped, 'item')} left out: their equipment group isn’t on this job)` : ''}.`); }
         catch (e) { toast('Job created, but the copy didn’t work: ' + niceError(e), true); }
       } else toast(j ? 'Job saved' : 'Job created');
@@ -438,27 +445,14 @@ const jtLogOne = (jobId, file) => { if (jobId) q(sb.rpc('jt_download_log', { p_j
 
 // choose the job's ticket items: from the list, from Inventory, or typed in
 async function jtJobItemsForm(j) {
-  let rows = j.items.map(i => ({ ...i }));
-  const draw = d => {
-    const box = $('#jt-ji', d);
-    box.innerHTML = rows.length ? Object.keys(JT_SEC).map(k => { const a = rows.map((r, i) => [r, i]).filter(([r]) => r.section === k); return a.length ? `<div class="jt-sec">${esc(JT_SEC[k])}</div>${a.map(([r, i]) => `<div class="jt-jirow">
-        <div class="jt-jid"><b>${esc(r.description)}</b>${r.is_new || !r.cat_id ? ' ' + chip('soon', 'New') : ''}<div class="sub">${esc(jtRuleText(r))}</div></div>
-        <label class="jt-q">Qty<input type="number" min="0" step="any" value="${esc(r.qty ?? 1)}" data-qty="${i}"></label>
-        <button type="button" class="btn small" data-jirm="${i}" title="Remove">${ico('trash')}</button></div>`).join('')}` : ''; }).join('') : '<div class="empty">Nothing chosen yet. Search below.</div>';
-    $$('[data-qty]', d).forEach(x => x.oninput = () => { rows[+x.dataset.qty].qty = x.value; });
-    $$('[data-jirm]', d).forEach(b => b.onclick = () => { rows.splice(+b.dataset.jirm, 1); draw(d); });
-    $('#jt-jicount', d).textContent = plural(rows.length, 'item');
-  };
+  // 3.0.15: add a whole item set, tick many items at once, or search as before
+  const ctx = { rows: j.items.map(i => ({ ...i })), groups: j.groups || [], j, setBar: true, saveSet: true };
   return modal({ title: 'Ticket items for ' + j.job_no, wide: true, submit: 'Save items',
     sub: 'What this job will put on its tickets. Quantity is how many (for example 2 TTSC engineers, or 5 people for feeding). Days are counted from the daily reports.',
-    body: `<div class="jt-jihead"><b id="jt-jicount"></b></div><div id="jt-ji" class="jt-ji"></div>
-      <div class="pjf-sec">Add</div>${jtPickerHtml('jt-jip')}`,
-    onOpen: d => {
-      draw(d);
-      jtBindPicker(d, 'jt-jip', j, item => { rows.push({ cat_id: item.cat_id || null, inv_item: item.inv_item || null, section: item.section, description: item.description, unit: item.unit, rule: item.rule, grp: item.grp, mode: item.mode || 'normal', qty: item.qty ?? 1, is_new: !item.cat_id }); draw(d); });
-    },
+    body: jtItemsEdHtml(ctx),
+    onOpen: d => { jtBindItemsEd(d, ctx); },
     onSubmit: async () => {
-      await q(sb.rpc('jt_job_items_set', { p_job: j.id, p_rows: rows.map(r => ({ id: r.id || null, cat_id: r.cat_id || null, inv_item: r.inv_item || null, section: r.section, description: r.description, unit: r.unit, rule: r.rule, grp: r.grp, mode: r.mode, qty: r.qty })) }));
+      await q(sb.rpc('jt_job_items_set', { p_job: j.id, p_rows: ctx.rows.map(r => ({ id: r.id || null, cat_id: r.cat_id || null, inv_item: r.inv_item || null, section: r.section, description: r.description, unit: r.unit, rule: r.rule, grp: r.grp, mode: r.mode, qty: r.qty })) }));
       toast('Ticket items saved'); render({ quiet: true });
     } });
 }

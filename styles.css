@@ -2237,3 +2237,36 @@ a.rp-bign:hover { color: var(--brand); }
 .jt-crewon { display: flex; gap: 6px; align-items: flex-start; font-size: 13px; color: var(--muted); margin-top: 4px; } .jt-crewon svg { width: 15px; height: 15px; flex: none; margin-top: 2px; }
 .jt-crewon b { color: var(--ink); font-weight: 600; }
 .jt-tkcrew .list .end { font-variant-numeric: tabular-nums; font-weight: 600; white-space: nowrap; }
+
+/* 3.0.15 JobTrack item sets and the tick list */
+.jt-setbar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 8px 12px; margin-bottom: 10px; background: #F6F7F9; border: 1px solid var(--line); border-radius: var(--radius-s); }
+.jt-setbar svg { width: 18px; height: 18px; color: var(--muted); flex: none; } .jt-setbar > span { font-weight: 600; }
+.jt-setbar.muted > span { font-weight: 400; color: var(--muted); }
+.jt-setbar select { flex: 1; min-width: 180px; margin: 0; }
+.jt-setmsg { margin: -4px 0 10px; padding: 8px 12px; border-radius: var(--radius-s); background: #EEF6EF; border: 1px solid #CFE6D2; color: #1E5631; font-size: 13.5px; }
+.jt-jihead { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.jt-jihead .btn svg { width: 15px; height: 15px; }
+.jt-addhead { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin: 14px 0 8px; }
+.jt-addhead .pjf-sec { margin: 0; }
+#jt-tkq { width: 100%; margin: 0 0 8px; }
+.jt-tklist { max-height: 42vh; overflow: auto; border: 1px solid var(--line); border-radius: var(--radius-s); }
+.jt-tksec > summary { display: flex; align-items: center; gap: 10px; padding: 9px 12px; cursor: pointer; font-weight: 700; background: #FAFAFB; border-bottom: 1px solid #E8ECEF; list-style: none; }
+.jt-tksec > summary::-webkit-details-marker { display: none; }
+.jt-tksec > summary::before { content: '›'; display: inline-block; width: 10px; color: var(--muted); transition: transform .15s; }
+.jt-tksec[open] > summary::before { transform: rotate(90deg); }
+.jt-tksec > summary .sub { color: var(--muted); font-weight: 400; font-size: 13px; }
+.jt-tkbadge { margin-left: auto; font-size: 12px; font-weight: 700; padding: 2px 8px; border-radius: 999px; background: #FFF1EA; color: var(--brand); }
+.jt-tk { display: flex; align-items: center; gap: 10px; padding: 7px 12px; border-bottom: 1px solid #EEF0F2; }
+.jt-tk > label { flex: 1; min-width: 0; display: flex; align-items: flex-start; gap: 10px; margin: 0; cursor: pointer; font-weight: 400; }
+.jt-tk > label input { margin-top: 3px; flex: none; width: 17px; height: 17px; accent-color: var(--brand); }
+.jt-tk .jt-jid b { font-weight: 600; } .jt-tk .jt-jid .sub { display: block; color: var(--muted); font-size: 12.5px; }
+.jt-tk.t { background: #FFF8F5; }
+.jt-tk.on > label, .jt-tk.blk > label { cursor: default; } .jt-tk.on .jt-jid b, .jt-tk.blk .jt-jid b { color: var(--muted); font-weight: 500; }
+.jt-tk input.jt-tkqty { width: 74px; height: 34px; padding: 4px 8px; margin: 0; flex: none; }
+.jt-tk:not(.t) input.jt-tkqty { opacity: .6; } .jt-tk:not(.t) input.jt-tkqty:focus { opacity: 1; }
+.jt-ji > .empty { padding: 16px; text-align: center; color: var(--muted); border: 0; }
+.jt-tkfoot { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 8px; font-size: 13.5px; }
+.jt-tkfoot .btn svg { width: 15px; height: 15px; }
+.jt-warn { color: #9A5B00; font-weight: 600; }
+#jt-srch .hint { margin: 6px 0 0; color: var(--muted); font-size: 12.5px; }
+@media (max-width: 640px) { .jt-tklist, .jt-ji { max-height: none; } .jt-tkfoot { position: sticky; bottom: -12px; z-index: 1; background: #fff; margin-bottom: -12px; padding: 10px 0 12px; border-top: 1px solid var(--line); } }
