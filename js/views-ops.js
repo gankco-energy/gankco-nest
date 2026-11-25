@@ -71,6 +71,68 @@ function editJob(j, after) {
   });
 }
 
+// ---------------------------------------------------------------- 3.0.15c: request lines: quantities, duplicates, search
+// the "In store now" cell: a warning when the store has less than the request asks for
+function mrStoreCell(l, st) { const n = stockOf(l.item_id, l.location_id); return n < +l.qty && st !== 'rejected' ? chip('overdue', fq(n) + ' only') : fq(n); }
+// lines for the same item from the same store (each group has 2 or more)
+function mrDuplicates(lines) {
+  const g = new Map(); lines.forEach(l => { const k = l.item_id + ':' + l.location_id; g.set(k, [...(g.get(k) || []), l]); });
+  return [...g.values()].filter(a => a.length > 1);
+}
+function bindMrLines(main, j, lines) {
+  // the quantity box on a draft: saves on leaving it (or Enter); 0 asks to remove the line
+  $$('.mr-qty', main).forEach(inp => {
+    const l = lines.find(x => x.id === +inp.dataset.qty); if (!l) return;
+    const save = async () => {
+      const v = inp.value.trim(), n = +v;
+      if (v === '' || !(n >= 0)) { inp.value = +l.qty; return; }
+      if (n === +l.qty) return;
+      if (n === 0) {
+        if (!confirm(`Remove ${l.items?.name || 'this item'} from the request?`)) { inp.value = +l.qty; return; }
+        try { await q(sb.from('job_lines').delete().eq('id', l.id)); toast('Removed'); render({ quiet: true }); } catch (e) { toast(niceError(e), true); inp.value = +l.qty; }
+        return;
+      }
+      inp.disabled = true;
+      try {
+        await q(sb.from('job_lines').update({ qty: n }).eq('id', l.id)); l.qty = n;
+        const cell = $(`[data-store="${l.id}"]`, main); if (cell) cell.innerHTML = mrStoreCell(l, null);
+        inp.classList.add('saved'); setTimeout(() => inp.classList.remove('saved'), 1200);
+        const left = stockOf(l.item_id, l.location_id); if (n > left) toast(`Saved, but only ${fq(left)} of ${l.items?.name} ${left === 1 ? 'is' : 'are'} in ${locName(l.location_id)}. Lower it before you submit.`, true);
+      } catch (e) { toast(niceError(e), true); inp.value = +l.qty; }
+      inp.disabled = false;
+    };
+    inp.onchange = save;
+    inp.onkeydown = e => { if (e.key === 'Enter') { e.preventDefault(); inp.blur(); } };
+  });
+  // join lines for the same item and store into one
+  const cb = $('#mr-combine', main); if (cb) cb.onclick = async () => {
+    const groups = mrDuplicates(lines);
+    if (!confirm(`Combine ${plural(groups.length, 'item')} into one line each? The quantities are added up.`)) return;
+    cb.disabled = true;
+    try {
+      for (const g of groups) {
+        const [keep, ...rest] = g;
+        await q(sb.from('job_lines').update({ qty: g.reduce((a, l) => a + +l.qty, 0), serials: [...new Set(g.map(l => l.serials).filter(Boolean))].join(', ') || null }).eq('id', keep.id));
+        await q(sb.from('job_lines').delete().in('id', rest.map(l => l.id)));
+      }
+      toast('Combined'); render({ quiet: true });
+    } catch (e) { toast(niceError(e), true); cb.disabled = false; }
+  };
+  // find an item on the request: hides the lines (and service-line sections) that don't match
+  const fq_ = $('#mr-q', main); if (!fq_) return;
+  const run = () => {
+    const t = fq_.value.trim().toLowerCase(), words = t.split(/\s+/).filter(Boolean); (S.mrFind = S.mrFind || {})[j.id] = fq_.value;
+    let shown = 0;
+    $$('tr[data-line]', main).forEach(tr => { const ok = words.every(w => tr.dataset.find.includes(w)); tr.hidden = !ok; if (ok) shown++; });
+    $$('section.mrsec', main).forEach(sec => { sec.hidden = !!words.length && !$$('tr[data-line]', sec).some(tr => !tr.hidden); });
+    $('#mr-n', main).textContent = words.length ? `${shown} of ${plural(lines.length, 'item')}` : plural(lines.length, 'item');
+    const none = $('.mr-none', main); if (none) none.hidden = !(words.length && !shown);
+  };
+  fq_.oninput = debounce(run, 120);
+  fq_.onkeydown = e => { if (e.key === 'Escape') { fq_.value = ''; run(); } };
+  run();
+}
+
 ROUTES.job = {
   async load(parts) {
     const id = +parts[1];
@@ -91,6 +153,9 @@ ROUTES.job = {
     const crewCan = !readOnly() && j.status !== 'cancelled' && (isSuper() || j.requester_id === S.profile.id || j.created_by === S.profile.id || lines.some(l => canAdmin(l.items?.department_id)) || secs.some(s => canAdmin(s.department_id)));
     this.crewCan = crewCan;
     const draft = j.status === 'draft';
+    // 3.0.15c: change quantities on a draft; one line per item and store
+    const editQty = draft && !readOnly();
+    const dups = draft ? mrDuplicates(lines) : [];
     const canReturn = ['out', 'partial'].includes(j.status) && lines.some(l => l.checkouts && !l.checkouts.closed_at);
     const isRequester = !S.viewAs && j.requester_id === S.profile.id;
     const ownReq = !isSuper() && !S.viewAs && (j.requester_id === S.profile.id || j.created_by === S.profile.id);
@@ -107,11 +172,11 @@ ROUTES.job = {
         ${sec?.note ? `<div class="body"><div class="notice bad">Reason: ${esc(sec.note)}</div></div>` : ''}
         <div class="tablewrap"><table class="t stack"><thead><tr><th>Item</th><th>From</th><th class="num">Qty</th><th>Serials</th>
           ${st === 'issued' ? '<th class="num">Back</th><th class="num">Damaged</th><th class="num">Used</th><th class="num">Sold</th><th class="num">Still out</th>' : '<th class="num">In store now</th><th></th>'}</tr></thead><tbody>
-          ${ls.map(l => `<tr><td class="full"><a href="#/item/${l.item_id}" class="plain">${tag(l.items?.code)} <span class="name">${esc(l.items?.name)}</span></a></td>
-            <td>${esc(locName(l.location_id))}</td><td class="num"><b>${fq(l.qty)}</b></td><td class="sub">${esc(l.serials || '')}</td>
+          ${ls.map(l => `<tr data-line="${l.id}" data-find="${esc(`${l.items?.code || ''} ${l.items?.name || ''} ${l.serials || ''} ${locName(l.location_id)}`.toLowerCase())}"><td class="full"><a href="#/item/${l.item_id}" class="plain">${tag(l.items?.code)} <span class="name">${esc(l.items?.name)}</span></a></td>
+            <td>${esc(locName(l.location_id))}</td><td class="num">${editQty ? `<input type="number" class="mr-qty" data-qty="${l.id}" min="0" step="any" value="${esc(+l.qty)}" aria-label="Quantity of ${esc(l.items?.name)}">` : `<b>${fq(l.qty)}</b>`}</td><td class="sub">${esc(l.serials || '')}</td>
             ${st === 'issued' ? `<td class="num">${zq(tally(l, 'return', 'available'))}</td><td class="num">${zq(tally(l, 'return', 'damaged'))}</td><td class="num">${zq(tally(l, 'issue'))}</td><td class="num">${zq(tally(l, 'sale'))}</td>
                  <td class="num">${l.checkouts && !l.checkouts.closed_at ? `<b>${fq(l.checkouts.open_qty)}</b>${+l.checkouts.missing_qty ? ' ' + chip('overdue', fq(l.checkouts.missing_qty) + ' missing') : ''}` : chip('ok', 'Done')}</td>`
-              : `<td class="num">${stockOf(l.item_id, l.location_id) < l.qty && st !== 'rejected' ? chip('overdue', fq(stockOf(l.item_id, l.location_id)) + ' only') : fq(stockOf(l.item_id, l.location_id))}</td>
+              : `<td class="num" data-store="${l.id}">${mrStoreCell(l, st)}</td>
                  <td class="num">${draft ? `<button class="btn small link danger" data-del="${l.id}">Remove</button>` : ''}</td>`}</tr>`).join('')}
           </tbody></table></div></section>`;
     };
@@ -135,14 +200,17 @@ ROUTES.job = {
       ${typeof requestClashHtml === 'function' ? requestClashHtml(clashes) : ''}
       ${crewPanel(j, crew, staff, crewCan)}
       ${pmPanel}
-      ${lines.length ? lineIds.map(section).join('') : `<section class="panel"><div class="empty">No items yet. Press <b>Add items</b> and search or scan what’s needed. You can also tick items on the Inventory page and choose <b>Add to materials request</b>.</div></section>`}
+      ${dups.length && editQty ? `<div class="notice warn mr-dups"><span>${plural(dups.length, 'item')} ${dups.length === 1 ? 'is' : 'are'} on this request more than once (${esc(dups.map(g => g[0].items?.name || 'item').slice(0, 3).join(', '))}${dups.length > 3 ? '…' : ''}).</span><button class="btn small" id="mr-combine">Combine duplicates</button></div>` : ''}
+      ${lines.length > 5 ? `<div class="mr-find"><input type="search" id="mr-q" placeholder="Find an item on this request (code, name or serial)" autocomplete="off" value="${esc(S.mrFind?.[j.id] || '')}"><span id="mr-n" class="muted"></span></div>` : ''}
+      ${lines.length ? lineIds.map(section).join('') + (lines.length > 5 ? '<div class="empty mr-none" hidden>No item on this request matches. Clear the search to see them all.</div>' : '') : `<section class="panel"><div class="empty">No items yet. Press <b>Add items</b> and search or scan what’s needed. You can also tick items on the Inventory page and choose <b>Add to materials request</b>.</div></section>`}
       ${j.notes ? `<section class="panel"><div class="body">${esc(j.notes)}</div></section>` : ''}
       ${isSuper() && !S.viewAs ? `<div class="po-danger dev"><button class="btn small link danger" id="dev-rev">${ico('undo')}Reverse &amp; remove this request</button><span class="sub">Developer only. Undoes everything it did to stock and removes it from every list. A full copy stays in the audit log.</span></div>` : ''}`;
   },
   bind(main) {
     const { j, lines, secs } = this.ctx || {}; if (!j) return;
     const b = id => $(id, main);
-    if (b('#add')) b('#add').onclick = () => addJobItems(j);
+    if (b('#add')) b('#add').onclick = () => addJobItems(j, lines);
+    bindMrLines(main, j, lines);
     if (b('#edit')) b('#edit').onclick = () => editJob(j);
     if (b('#dev-rev')) b('#dev-rev').onclick = () => devConfirm({ title: `Reverse ${j.job_no}`, expect: j.job_no, submit: 'Reverse & remove', sub: 'Stock goes back to how it was before this request, and the request is removed from every list.',
       run: async c => { await q(sb.rpc('dev_reverse_request', { p_job: j.id, p_confirm: c })); toast(`${j.job_no} reversed`); go('#/jobs'); } });
@@ -210,8 +278,9 @@ async function addSelectedToRequest(sel) {
   });
 }
 
-function addJobItems(j) {
+function addJobItems(j, lines = []) {
   const picked = new Map();
+  const onReq = id => lines.filter(l => l.item_id === id).reduce((a, l) => a + +l.qty, 0);
   return modal({
     title: `Add items to ${j.job_no}`, wide: true, submit: 'Add to request',
     sub: `Search or scan. Items come from ${esc(locName(j.base_location_id))} unless you pick another location. Items from any service line can go on one request.`,
@@ -223,7 +292,7 @@ function addJobItems(j) {
       const drawSel = () => {
         if (!picked.size) { sel.innerHTML = 'Nothing picked yet.'; return; }
         sel.innerHTML = `<table class="t"><thead><tr><th>Item</th><th>From</th><th class="num">Qty</th><th>Serials</th><th></th></tr></thead><tbody>${[...picked.values()].map(p => `<tr data-k="${p.it.id}">
-          <td>${tag(p.it.code)} ${esc(p.it.name)}<div class="sub">${esc(lineShort(p.it.department_id))}</div></td>
+          <td>${tag(p.it.code)} ${esc(p.it.name)}<div class="sub">${esc(lineShort(p.it.department_id))}${onReq(p.it.id) ? ` · <b>${fq(onReq(p.it.id))} already on this request</b>: this adds to it` : ''}</div></td>
           <td><select data-f="loc">${S.locs.filter(l => avail(p.it.id, l.id) > 0 || l.id === p.loc).map(l => opt(l.id, `${l.name} (${avail(p.it.id, l.id)})`, p.loc)).join('')}</select></td>
           <td class="num"><input type="number" data-f="qty" min="0" step="any" value="${p.qty}" style="width:80px"></td>
           <td><input type="text" data-f="serials" value="${esc(p.serials)}" placeholder="optional"></td>
@@ -243,7 +312,7 @@ function addJobItems(j) {
         const exact = matchCode(t); if (exact.length === 1 && t.length > 6) { add(exact[0]); return; }
         const hits = S.items.filter(i => i.active && `${i.code || ''} ${i.name} ${i.serials || ''}`.toLowerCase().includes(t)).slice(0, 25);
         res.innerHTML = hits.length ? hits.map(i => `<button type="button" class="pick" data-id="${i.id}">${tag(i.code)} <span>${esc(i.name)}</span>
-          <span class="sub">${esc(i.line)} · ${fq(avail(i.id, j.base_location_id))} at ${esc(locName(j.base_location_id))} · ${fq(i.qty_available)} in store</span></button>`).join('') : '<div class="empty">No match.</div>';
+          <span class="sub">${esc(i.line)} · ${fq(avail(i.id, j.base_location_id))} at ${esc(locName(j.base_location_id))} · ${fq(i.qty_available)} in store${onReq(i.id) ? ` · <b class="mr-onreq">Already on this request: ${fq(onReq(i.id))}</b>` : ''}</span></button>`).join('') : '<div class="empty">No match.</div>';
         $$('[data-id]', res).forEach(x => x.onclick = () => add(S.items.find(i => i.id === +x.dataset.id)));
       };
       qi.oninput = debounce(search, 150);
@@ -251,12 +320,20 @@ function addJobItems(j) {
     },
     onSubmit: async () => {
       if (!picked.size) throw new Error('Pick at least one item.');
-      const rows = [...picked.values()].map(p => {
+      // an item already on the request from the same store goes onto that line
+      const cur = await q(sb.from('job_lines').select('id,item_id,location_id,qty,serials').eq('job_id', j.id).order('id'));
+      const ins = [], ups = [];
+      for (const p of picked.values()) {
         const n = +p.qty; if (!(n > 0)) throw new Error(`Enter a quantity for ${p.it.name}.`);
-        if (n > stockOf(p.it.id, p.loc)) throw new Error(`Only ${stockOf(p.it.id, p.loc)} of ${p.it.name} available at ${locName(p.loc)}.`);
-        return { job_id: j.id, item_id: p.it.id, location_id: p.loc, qty: n, serials: p.serials || null };
-      });
-      await q(sb.from('job_lines').insert(rows)); toast(`Added ${plural(rows.length, 'item')}`); render({ quiet: true });
+        const same = cur.find(l => l.item_id === p.it.id && l.location_id === p.loc && +l.qty > 0);
+        const had = same ? +same.qty : 0;
+        if (n + had > stockOf(p.it.id, p.loc)) throw new Error(`Only ${fq(stockOf(p.it.id, p.loc))} of ${p.it.name} available at ${locName(p.loc)}${had ? ` (${fq(had)} already on this request)` : ''}.`);
+        if (same) ups.push({ id: same.id, qty: had + n, serials: [same.serials, p.serials].filter(Boolean).join(', ') || null });
+        else ins.push({ job_id: j.id, item_id: p.it.id, location_id: p.loc, qty: n, serials: p.serials || null });
+      }
+      for (const u of ups) await q(sb.from('job_lines').update({ qty: u.qty, serials: u.serials }).eq('id', u.id));
+      if (ins.length) await q(sb.from('job_lines').insert(ins));
+      toast([ins.length ? `Added ${plural(ins.length, 'item')}` : '', ups.length ? `${ins.length ? 'r' : 'R'}aised the quantity of ${plural(ups.length, 'item')} already on it` : ''].filter(Boolean).join(', ')); render({ quiet: true });
     }
   });
 }
