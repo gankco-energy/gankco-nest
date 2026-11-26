@@ -110,7 +110,8 @@ async function pmApplyChange(reqId, beforeIds, afterIds) {
   const before = planDemand(E, beforeIds.map(byId).filter(Boolean)), after = planDemand(E, afterIds.map(byId).filter(Boolean));
   const req = await q(sb.from('jobs').select('id,client,status').eq('id', reqId).single());
   if (req.status !== 'draft') throw new Error('Only a draft request can be changed.');
-  const lines = await q(sb.from('job_lines').select('id,item_id,location_id,qty').eq('job_id', reqId).order('id'));
+  // 3.0.16: the lines inside a box come and go with the box, so the planner leaves them alone
+  const lines = (await q(sb.from('job_lines').select('id,item_id,location_id,qty,box_line_id').eq('job_id', reqId).order('id'))).filter(l => !l.box_line_id);
   const add = new Map(), less = [];
   new Set([...before.keys(), ...after.keys()]).forEach(k => {
     const a = after.get(k), b = before.get(k); const delta = (a?.qty || 0) - (b?.qty || 0);
@@ -192,7 +193,9 @@ function bindPmRequestPanel(main) {
 }
 async function pmMergeDrafts(into, other) {
   if (!other || !sameClient(into.client, other.client)) throw new Error('Only drafts of the same client can be merged.');
-  const [a, b] = await Promise.all([q(sb.from('job_lines').select('id,item_id,location_id,qty,serials,notes').eq('job_id', into.id)), q(sb.from('job_lines').select('id,item_id,location_id,qty,serials,notes').eq('job_id', other.id))]);
+  // 3.0.16: a box brings its own contents, so the lines inside boxes aren't copied or matched
+  const [a, b] = (await Promise.all([q(sb.from('job_lines').select('id,item_id,location_id,qty,serials,notes,box_line_id').eq('job_id', into.id)), q(sb.from('job_lines').select('id,item_id,location_id,qty,serials,notes,box_line_id').eq('job_id', other.id))]))
+    .map(ls => ls.filter(l => !l.box_line_id));
   await items();
   for (const l of b) {
     const it = pmItem(l.item_id); const back = it?.item_type === 'equipment';

@@ -304,13 +304,17 @@ async function items(force = false) {
   return S.items;
 }
 async function stockRows(force = false) {
-  if (!S.stock || force) S.stock = await fetchAll(() => sb.from('stock').select('item_id,location_id,status,qty').gt('qty', 0));
+  if (!S.stock || force) {
+    // 3.0.16: what's inside each box comes with the stock, so "loose" can be worked out anywhere stock is shown
+    const [st] = await Promise.all([fetchAll(() => sb.from('stock').select('item_id,location_id,status,qty').gt('qty', 0)), typeof boxLoad === 'function' ? boxLoad(true) : null]);
+    S.stock = st;
+  }
   return S.stock;
 }
 function stockOf(itemId, locId, status = 'available') {
   return +((S.stock || []).find(s => s.item_id === itemId && s.location_id === +locId && s.status === status)?.qty || 0);
 }
-function invalidate() { S.items = null; S.stock = null; S.plan = null; S.ordersAt = 0; }
+function invalidate() { S.items = null; S.stock = null; S.box = null; S.plan = null; S.ordersAt = 0; }
 // items marked On order (2.6), keyed by item id
 async function loadOrders() {
   if (S.ordersAt && Date.now() - S.ordersAt < 60000) return S.orders;

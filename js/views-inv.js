@@ -271,7 +271,7 @@ ROUTES.inventory = {
       return `<tr class="${f.edit ? '' : 'click'} ${f.edit && !editable ? 'locked' : ''}" data-id="${i.id}">
       <td class="cb"><input type="checkbox" data-sel="${i.id}" ${sel.has(i.id) ? 'checked' : ''} aria-label="Select ${esc(i.name)}"></td>
       <td class="codecell">${tag(i.code)}</td>
-      <td class="full desc"><div class="name">${f.edit ? `<a href="#/item/${i.id}">${esc(i.name)}</a>` : esc(i.name)}</div><div class="sub">${esc(invPlace(i))}${i.is_kit ? ' · Kit' : ''}</div></td>
+      <td class="full desc"><div class="name">${f.edit ? `<a href="#/item/${i.id}">${esc(i.name)}</a>` : esc(i.name)}</div><div class="sub">${esc(invPlace(i))}${i.is_kit ? ' · Kit' : ''}${typeof isBox === 'function' && isBox(i.id) ? ` · Box: ${plural(boxContents(i.id).length, 'item')} inside` : ''}${typeof boxesHolding === 'function' && boxesHolding(i.id).length ? ` · In ${esc(boxesHolding(i.id).map(c => boxName(c.box_id)).join(', '))}` : ''}</div></td>
       ${cells}
       <td class="num outcell ${+i.qty_out ? '' : 'zero'}">${+i.qty_out ? `<b>${fq(i.qty_out)}</b>` : '·'}<span class="qlbl">Out</span></td>
       <td class="full chips">${statusChips(i)}</td>
@@ -597,6 +597,7 @@ ROUTES.item = {
       isAdmin() ? q(sb.from('audit_log').select('at,user_name,action,old_data,new_data').eq('table_name', 'items').eq('record_id', String(id)).eq('action', 'update').order('at', { ascending: false }).limit(20)).catch(() => []) : Promise.resolve([]),
     ]);
     if (!it) return topbar('Item not found', 'It may have been removed.') + '<a class="btn" href="#/inventory">Back to inventory</a>';
+    await Promise.all([items(), stockRows()]);   // 3.0.16: boxes (what's inside, and what's loose)
     it.service_idle_months = svc?.service_idle_months ?? null; it.service_unit = svc?.service_unit || 'month';
     this.ctx = { it, stock, cos, units, certs, comps, price, order, svc };
     const t = localISO(0); const act = canAct(it.department_id); const adm = canAdmin(it.department_id);
@@ -632,6 +633,7 @@ ROUTES.item = {
         <button class="btn" data-a="status">Change status</button>
         <button class="btn" data-a="count">Correct quantity</button>
         ${adm ? '<button class="btn" data-a="edit">Edit item</button>' : ''}
+        ${adm && !isBox(it.id) && !boxesHolding(it.id).length ? `<button class="btn" id="box-make" title="Make this a box: list what lives inside it">${ico('box')}Add contents</button>` : ''}
       </div>` : `<div class="notice">This item belongs to <b>${esc(it.line)}</b>. You can view it, but only ${esc(it.line)} staff and admins can change it.</div>`}
       ${cos.length ? `<section class="panel"><header><h2>Out on jobs</h2><span class="meta">${fq(it.qty_out)} ${esc(it.unit)}</span></header>
         <div class="tablewrap"><table class="t stack"><thead><tr><th>Job / well / site</th><th>With</th><th class="num">Qty</th><th>Out since</th><th>Due back</th><th></th></tr></thead><tbody>
@@ -640,6 +642,7 @@ ROUTES.item = {
           <td class="hide-m">${fd(c.out_at)}</td><td>${c.due_back ? (c.due_back < t ? chip('overdue', fd(c.due_back)) : fd(c.due_back)) : '—'}</td>
           <td class="num nowrap">${act ? `<button class="btn small" data-ret="${c.id}">Return</button> <button class="btn small" data-use="${c.id}">Used / sold</button>` : ''}
             ${adm ? ` <button class="btn small link danger" data-lost="${c.id}">Write off lost</button>` : ''}</td></tr>`).join('')}</tbody></table></div></section>` : ''}
+      ${boxPanelsHtml(it, adm)}
       ${it.is_kit ? `<section class="panel"><header><h2>Redress kits</h2><span class="meta">${plural(units.length, 'kit')} recorded · ${fq(it.qty_total)} on record</span>
         ${act ? `<div class="right"><button class="btn small" data-a="kit">${ico('plus')}Add / update kit</button></div>` : ''}</header>
         ${units.length !== +it.qty_total && units.length ? `<div class="body"><div class="notice">${plural(units.length, 'kit number')} recorded but ${fq(it.qty_total)} kits on record. Add the missing kit numbers so every kit’s expiry is tracked.</div></div>` : ''}
@@ -686,6 +689,7 @@ ROUTES.item = {
     $$('[data-kit]', main).forEach(b => b.onclick = () => editKit(c, c.units.find(u => u.id === +b.dataset.kit)));
     const l = $('#lbl', main); if (l) l.onclick = () => { sessionStorage.setItem('labels', JSON.stringify([c.it.id])); go('#/labels'); };
     bindItemExtras(main, c);
+    bindBoxPanels(main, c.it);
   }
 };
 

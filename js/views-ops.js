@@ -73,10 +73,16 @@ function editJob(j, after) {
 
 // ---------------------------------------------------------------- 3.0.15c: request lines: quantities, duplicates, search
 // the "In store now" cell: a warning when the store has less than the request asks for
-function mrStoreCell(l, st) { const n = stockOf(l.item_id, l.location_id); return n < +l.qty && st !== 'rejected' ? chip('overdue', fq(n) + ' only') : fq(n); }
+function mrStoreCell(l, st, lines = []) {
+  // 3.0.16: an item on its own can only take what's loose (not inside a box that stays in the store)
+  const inside = !l.box_line_id && typeof boxReserved === 'function' ? boxReserved(l.item_id, l.location_id, lines) : 0;
+  const n = inside ? looseOf(l.item_id, l.location_id, lines) : stockOf(l.item_id, l.location_id);
+  const txt = inside ? `${fq(n)} loose` : fq(n);
+  return (n < +l.qty && st !== 'rejected' ? chip('overdue', (inside ? txt : fq(n)) + ' only') : txt) + (inside ? `<div class="sub">${esc(boxInsideText(l.item_id, l.location_id, lines))}</div>` : '');
+}
 // lines for the same item from the same store (each group has 2 or more)
 function mrDuplicates(lines) {
-  const g = new Map(); lines.forEach(l => { const k = l.item_id + ':' + l.location_id; g.set(k, [...(g.get(k) || []), l]); });
+  const g = new Map(); lines.filter(l => !l.box_line_id).forEach(l => { const k = l.item_id + ':' + l.location_id; g.set(k, [...(g.get(k) || []), l]); });
   return [...g.values()].filter(a => a.length > 1);
 }
 function bindMrLines(main, j, lines) {
@@ -95,14 +101,21 @@ function bindMrLines(main, j, lines) {
       inp.disabled = true;
       try {
         await q(sb.from('job_lines').update({ qty: n }).eq('id', l.id)); l.qty = n;
-        const cell = $(`[data-store="${l.id}"]`, main); if (cell) cell.innerHTML = mrStoreCell(l, null);
+        if (lines.some(x => x.box_line_id === l.id)) { render({ quiet: true }); return; }
+        const cell = $(`[data-store="${l.id}"]`, main); if (cell) cell.innerHTML = mrStoreCell(l, null, lines);
         inp.classList.add('saved'); setTimeout(() => inp.classList.remove('saved'), 1200);
-        const left = stockOf(l.item_id, l.location_id); if (n > left) toast(`Saved, but only ${fq(left)} of ${l.items?.name} ${left === 1 ? 'is' : 'are'} in ${locName(l.location_id)}. Lower it before you submit.`, true);
+        const left = l.box_line_id ? stockOf(l.item_id, l.location_id) : looseOf(l.item_id, l.location_id, lines); if (n > left) toast(`Saved, but only ${fq(left)} of ${l.items?.name} ${left === 1 ? 'is' : 'are'} in ${locName(l.location_id)}. Lower it before you submit.`, true);
       } catch (e) { toast(niceError(e), true); inp.value = +l.qty; }
       inp.disabled = false;
     };
     inp.onchange = save;
     inp.onkeydown = e => { if (e.key === 'Enter') { e.preventDefault(); inp.blur(); } };
+  });
+  // 3.0.16: pack or unpack an item of a box
+  $$('[data-pack]', main).forEach(c => c.onchange = async () => {
+    const [bl, it] = c.dataset.pack.split(':').map(Number); const boxLine = lines.find(x => x.id === bl); if (!boxLine) return;
+    c.disabled = true;
+    try { await boxPack(j, boxLine, it, c.checked); render({ quiet: true }); } catch (e) { toast(niceError(e), true); c.checked = !c.checked; c.disabled = false; }
   });
   // join lines for the same item and store into one
   const cb = $('#mr-combine', main); if (cb) cb.onclick = async () => {
@@ -162,6 +175,33 @@ ROUTES.job = {
     const canConfirm = isRequester && ['out', 'closed'].includes(j.status) && !j.received_at && secs.some(s => s.state === 'issued');
     const tally = (l, type, st) => moves.filter(m => m.checkout_id === l.checkout_id && m.type === type && (!st || m.to_status === st)).reduce((a, m) => a + +m.qty, 0);
     const lineIds = [...new Set(lines.map(l => l.items?.department_id))].sort((a, b) => (S.depts.findIndex(d => d.id === a)) - (S.depts.findIndex(d => d.id === b)));
+    // 3.0.16: one line; a box's line says what comes with it, and the lines inside it are indented with a Packed tick on a draft
+    const mrRow = (l, st) => {
+      const inBox = l.box_line_id ? lines.find(b => b.id === l.box_line_id) : null;
+      const isBoxLine = !l.box_line_id && lines.some(x => x.box_line_id === l.id);
+      const np = !l.box_line_id && typeof isBox === 'function' && isBox(l.item_id) ? boxNotPacked(l, lines) : [];
+      const boxNote = isBoxLine || np.length ? `<div class="sub">${plural(lines.filter(x => x.box_line_id === l.id).length, 'item')} inside come${lines.filter(x => x.box_line_id === l.id).length === 1 ? 's' : ''} with it${np.length ? ` · ${np.length} not packed` : ''}</div>` : '';
+      const find = `${l.items?.code || ''} ${l.items?.name || ''} ${l.serials || ''} ${locName(l.location_id)} ${inBox ? inBox.items?.name || '' : ''}`.toLowerCase();
+      const row = `<tr data-line="${l.id}" data-find="${esc(find)}" class="${inBox ? 'mr-in' : ''}${isBoxLine ? ' mr-box' : ''}"><td class="full">${inBox ? '<span class="mr-inmark" aria-hidden="true">↳</span>' : ''}<a href="#/item/${l.item_id}" class="plain">${tag(l.items?.code)} <span class="name">${esc(l.items?.name)}</span></a>${isBoxLine ? ' ' + chip('out', 'Box') : ''}${boxNote}</td>
+            <td>${esc(locName(l.location_id))}</td><td class="num">${editQty ? `<input type="number" class="mr-qty" data-qty="${l.id}" min="0" step="any" value="${esc(+l.qty)}" aria-label="Quantity of ${esc(l.items?.name)}">` : `<b>${fq(l.qty)}</b>`}</td><td class="sub">${esc(l.serials || '')}</td>
+            ${st === 'issued' ? `<td class="num">${zq(tally(l, 'return', 'available'))}</td><td class="num">${zq(tally(l, 'return', 'damaged'))}</td><td class="num">${zq(tally(l, 'issue'))}</td><td class="num">${zq(tally(l, 'sale'))}</td>
+                 <td class="num">${l.checkouts && !l.checkouts.closed_at ? `<b>${fq(l.checkouts.open_qty)}</b>${+l.checkouts.missing_qty ? ' ' + chip('overdue', fq(l.checkouts.missing_qty) + ' missing') : ''}` : chip('ok', 'Done')}</td>`
+              : `<td class="num" data-store="${l.id}">${mrStoreCell(l, st, lines)}</td>
+                 <td class="num">${draft && inBox ? `<label class="check inline mr-pack"><input type="checkbox" data-pack="${inBox.id}:${l.item_id}" checked ${editQty ? '' : 'disabled'}> Packed</label>` : draft ? `<button class="btn small link danger" data-del="${l.id}">Remove</button>` : ''}</td>`}</tr>`;
+      // what's in the box but not on the request
+      const rest = np.map(c => { const it = S.items?.find(i => i.id === c.item_id);
+        return `<tr data-line="np${l.id}-${c.item_id}" data-find="${esc(`${it?.code || ''} ${it?.name || ''} ${l.items?.name || ''}`.toLowerCase())}" class="mr-in mr-np"><td class="full"><span class="mr-inmark" aria-hidden="true">↳</span>${tag(it?.code)} <span class="name">${esc(it?.name || '')}</span></td>
+          <td>${esc(locName(l.location_id))}</td><td class="num"><span class="muted">${fq(+c.qty * +l.qty)}</span></td><td></td>
+          ${st === 'issued' ? `<td colspan="5" class="sub">Not packed: stayed in the store</td>` : `<td class="num">${fq(stockOf(c.item_id, l.location_id))}</td>
+          <td class="num">${draft ? `<label class="check inline mr-pack"><input type="checkbox" data-pack="${l.id}:${c.item_id}" ${editQty ? '' : 'disabled'}> Packed</label>` : chip('muted', 'Not packed')}</td>`}</tr>`; }).join('');
+      return { row, rest };
+    };
+    // a box's "not packed" rows go after the last line inside it (or straight after the box when nothing is packed)
+    const mrRows = (ls, st) => { const order = boxOrder(ls), out = [];
+      order.forEach((l, k) => { const r = mrRow(l, st); out.push(r.row);
+        const boxId = l.box_line_id || l.id, next = order[k + 1];
+        if (!next || (next.box_line_id || next.id) !== boxId) { const bl = l.box_line_id ? lines.find(b => b.id === l.box_line_id) : l; if (bl) out.push(bl === l ? r.rest : mrRow(bl, st).rest); } });
+      return out.join(''); };
     const section = d => {
       const sec = secs.find(s => s.department_id === d); const ls = lines.filter(l => l.items?.department_id === d);
       // 3.0.4 fix: a cancelled request (never submitted) has no line approvals, so it isn't "waiting"
@@ -172,12 +212,7 @@ ROUTES.job = {
         ${sec?.note ? `<div class="body"><div class="notice bad">Reason: ${esc(sec.note)}</div></div>` : ''}
         <div class="tablewrap"><table class="t stack"><thead><tr><th>Item</th><th>From</th><th class="num">Qty</th><th>Serials</th>
           ${st === 'issued' ? '<th class="num">Back</th><th class="num">Damaged</th><th class="num">Used</th><th class="num">Sold</th><th class="num">Still out</th>' : '<th class="num">In store now</th><th></th>'}</tr></thead><tbody>
-          ${ls.map(l => `<tr data-line="${l.id}" data-find="${esc(`${l.items?.code || ''} ${l.items?.name || ''} ${l.serials || ''} ${locName(l.location_id)}`.toLowerCase())}"><td class="full"><a href="#/item/${l.item_id}" class="plain">${tag(l.items?.code)} <span class="name">${esc(l.items?.name)}</span></a></td>
-            <td>${esc(locName(l.location_id))}</td><td class="num">${editQty ? `<input type="number" class="mr-qty" data-qty="${l.id}" min="0" step="any" value="${esc(+l.qty)}" aria-label="Quantity of ${esc(l.items?.name)}">` : `<b>${fq(l.qty)}</b>`}</td><td class="sub">${esc(l.serials || '')}</td>
-            ${st === 'issued' ? `<td class="num">${zq(tally(l, 'return', 'available'))}</td><td class="num">${zq(tally(l, 'return', 'damaged'))}</td><td class="num">${zq(tally(l, 'issue'))}</td><td class="num">${zq(tally(l, 'sale'))}</td>
-                 <td class="num">${l.checkouts && !l.checkouts.closed_at ? `<b>${fq(l.checkouts.open_qty)}</b>${+l.checkouts.missing_qty ? ' ' + chip('overdue', fq(l.checkouts.missing_qty) + ' missing') : ''}` : chip('ok', 'Done')}</td>`
-              : `<td class="num" data-store="${l.id}">${mrStoreCell(l, st)}</td>
-                 <td class="num">${draft ? `<button class="btn small link danger" data-del="${l.id}">Remove</button>` : ''}</td>`}</tr>`).join('')}
+          ${mrRows(ls, st)}
           </tbody></table></div></section>`;
     };
     return `<a class="back" href="#/jobs">← Materials requests</a>
@@ -248,7 +283,10 @@ ROUTES.job = {
     if (b('#manifest')) b('#manifest').onclick = () => jobManifest(j, lines, this.ctx.moves, secs, this.ctx.crew, this.ctx.staff);
     if (b('#crew')) b('#crew').onclick = () => editCrew(j, this.ctx.crew, this.ctx.staff);
     if (typeof bindPmRequestPanel === 'function') bindPmRequestPanel(main);
-    $$('[data-del]', main).forEach(x => x.onclick = async () => { try { await q(sb.from('job_lines').delete().eq('id', +x.dataset.del)); render({ quiet: true }); } catch (e) { toast(niceError(e), true); } });
+    $$('[data-del]', main).forEach(x => x.onclick = async () => {
+      const l = lines.find(y => y.id === +x.dataset.del), n = lines.filter(y => y.box_line_id === +x.dataset.del).length;
+      if (n && !confirm(`Remove ${l?.items?.name || 'the box'} and the ${plural(n, 'item')} inside it from the request?`)) return;
+      try { await q(sb.from('job_lines').delete().eq('id', +x.dataset.del)); render({ quiet: true }); } catch (e) { toast(niceError(e), true); } });
   }
 };
 
@@ -280,7 +318,11 @@ async function addSelectedToRequest(sel) {
 
 function addJobItems(j, lines = []) {
   const picked = new Map();
-  const onReq = id => lines.filter(l => l.item_id === id).reduce((a, l) => a + +l.qty, 0);
+  const onReq = id => lines.filter(l => l.item_id === id && !l.box_line_id).reduce((a, l) => a + +l.qty, 0);
+  // 3.0.16: what an item can take on its own (not what's inside a box in the store), and what a box brings
+  const free = (id, loc) => typeof looseOf === 'function' ? looseOf(id, loc, lines) : stockOf(id, loc);
+  const boxNote = i => typeof isBox === 'function' && isBox(i.id) ? ` · <b>Box: ${plural(boxContents(i.id).length, 'item')} inside come with it</b>` : '';
+  const insideNote = (i, loc) => typeof boxInsideText === 'function' && boxReserved(i.id, loc, lines) ? ` · ${esc(boxInsideText(i.id, loc, lines))}` : '';
   return modal({
     title: `Add items to ${j.job_no}`, wide: true, submit: 'Add to request',
     sub: `Search or scan. Items come from ${esc(locName(j.base_location_id))} unless you pick another location. Items from any service line can go on one request.`,
@@ -312,7 +354,7 @@ function addJobItems(j, lines = []) {
         const exact = matchCode(t); if (exact.length === 1 && t.length > 6) { add(exact[0]); return; }
         const hits = S.items.filter(i => i.active && `${i.code || ''} ${i.name} ${i.serials || ''}`.toLowerCase().includes(t)).slice(0, 25);
         res.innerHTML = hits.length ? hits.map(i => `<button type="button" class="pick" data-id="${i.id}">${tag(i.code)} <span>${esc(i.name)}</span>
-          <span class="sub">${esc(i.line)} · ${fq(avail(i.id, j.base_location_id))} at ${esc(locName(j.base_location_id))} · ${fq(i.qty_available)} in store${onReq(i.id) ? ` · <b class="mr-onreq">Already on this request: ${fq(onReq(i.id))}</b>` : ''}</span></button>`).join('') : '<div class="empty">No match.</div>';
+          <span class="sub">${esc(i.line)} · ${boxReserved(i.id, j.base_location_id, lines) ? `${fq(free(i.id, j.base_location_id))} loose` : fq(avail(i.id, j.base_location_id))} at ${esc(locName(j.base_location_id))}${insideNote(i, j.base_location_id)} · ${fq(i.qty_available)} in store${boxNote(i)}${onReq(i.id) ? ` · <b class="mr-onreq">Already on this request: ${fq(onReq(i.id))}</b>` : ''}</span></button>`).join('') : '<div class="empty">No match.</div>';
         $$('[data-id]', res).forEach(x => x.onclick = () => add(S.items.find(i => i.id === +x.dataset.id)));
       };
       qi.oninput = debounce(search, 150);
@@ -321,13 +363,15 @@ function addJobItems(j, lines = []) {
     onSubmit: async () => {
       if (!picked.size) throw new Error('Pick at least one item.');
       // an item already on the request from the same store goes onto that line
-      const cur = await q(sb.from('job_lines').select('id,item_id,location_id,qty,serials').eq('job_id', j.id).order('id'));
+      const cur = await q(sb.from('job_lines').select('id,item_id,location_id,qty,serials,box_line_id').eq('job_id', j.id).order('id'));
       const ins = [], ups = [];
       for (const p of picked.values()) {
         const n = +p.qty; if (!(n > 0)) throw new Error(`Enter a quantity for ${p.it.name}.`);
-        const same = cur.find(l => l.item_id === p.it.id && l.location_id === p.loc && +l.qty > 0);
+        const same = cur.find(l => l.item_id === p.it.id && l.location_id === p.loc && +l.qty > 0 && !l.box_line_id);
         const had = same ? +same.qty : 0;
-        if (n + had > stockOf(p.it.id, p.loc)) throw new Error(`Only ${fq(stockOf(p.it.id, p.loc))} of ${p.it.name} available at ${locName(p.loc)}${had ? ` (${fq(had)} already on this request)` : ''}.`);
+        const canTake = typeof looseOf === 'function' ? looseOf(p.it.id, p.loc, cur) : stockOf(p.it.id, p.loc);
+        const inside = canTake < stockOf(p.it.id, p.loc) ? `, ${boxInsideText(p.it.id, p.loc, cur)}` : '';
+        if (n + had > canTake) throw new Error(`Only ${fq(canTake)} of ${p.it.name} ${inside ? 'loose' : 'available'} at ${locName(p.loc)}${inside}${had ? ` (${fq(had)} already on this request)` : ''}.${inside ? ' Add the box instead, or take it out of the box first.' : ''}`);
         if (same) ups.push({ id: same.id, qty: had + n, serials: [same.serials, p.serials].filter(Boolean).join(', ') || null });
         else ins.push({ job_id: j.id, item_id: p.it.id, location_id: p.loc, qty: n, serials: p.serials || null });
       }
@@ -339,19 +383,29 @@ function addJobItems(j, lines = []) {
 }
 
 function jobReturn(j, lines) {
-  const open = lines.filter(l => l.checkouts && !l.checkouts.closed_at);
+  const open = boxOrder(lines.filter(l => l.checkouts && !l.checkouts.closed_at));
   if (!open.length) return toast('Everything issued on this request is already accounted for.');
+  const kids = id => open.filter(x => x.box_line_id === id);
   return modal({
     title: `Record return: ${j.job_no}`, wide: true, submit: 'Save return',
     sub: 'For each line, enter what came back and what was used, sold or is missing. Anything not entered stays out on the job.',
     body: `<div class="row2"><label class="f">Coming back to<select name="loc">${realLocOptions(j.base_location_id)}</select></label><div></div></div>
       <div class="tablewrap"><table class="t rettbl"><thead><tr><th>Item</th><th class="num">Still out</th><th>Back good</th><th>Back damaged</th><th>Used</th><th>Sold</th><th>Missing</th></tr></thead><tbody>
-      ${open.map(l => { const o = +l.checkouts.open_qty; const t = l.items?.item_type;
-        return `<tr><td>${tag(l.items?.code)} ${esc(l.items?.name)}</td><td class="num"><b>${fq(o)}</b></td>
+      ${open.map(l => { const o = +l.checkouts.open_qty; const t = l.items?.item_type; const k = kids(l.id);
+        return `<tr class="${l.box_line_id ? 'mr-in' : ''}"><td>${l.box_line_id ? '<span class="mr-inmark" aria-hidden="true">↳</span>' : ''}${tag(l.items?.code)} ${esc(l.items?.name)}${k.length ? `<div class="mr-allback"><button type="button" class="btn small" data-allback="${l.id}">${ico('check')}All back</button> <span class="sub">the box and the ${plural(k.length, 'item')} inside, in good condition</span></div>` : ''}</td><td class="num"><b>${fq(o)}</b></td>
         ${['good', 'damaged', 'used', 'sold', 'missing'].map(k => `<td><input type="number" min="0" step="any" max="${o}" name="${k}_${l.id}" value="${(k === 'good' && t === 'equipment') ? o : ''}" placeholder="0"></td>`).join('')}</tr>`; }).join('')}
       </tbody></table></div>
       <label class="f mt">Notes<input type="text" name="notes" placeholder="Condition, who brought it back"></label>
       <p class="muted">Missing items stay on the request and the service line’s admin is alerted. An admin can write them off from the item page.</p>`,
+    onOpen: d => {
+      // 3.0.16: the whole box back in good condition; then mark only what's missing, used or damaged
+      $$('[data-allback]', d).forEach(b => b.onclick = () => {
+        const id = +b.dataset.allback;
+        [open.find(x => x.id === id), ...kids(id)].forEach(l => { const o = +l.checkouts.open_qty;
+          ['good', 'damaged', 'used', 'sold', 'missing'].forEach(k => { const inp = $(`[name="${k}_${l.id}"]`, d); if (inp) inp.value = k === 'good' ? o : ''; }); });
+        b.textContent = 'Filled in: change anything that didn’t come back'; b.disabled = true;
+      });
+    },
     onSubmit: async x => {
       const rows = open.map(l => ({ line_id: l.id, good: x['good_' + l.id], damaged: x['damaged_' + l.id], used: x['used_' + l.id], sold: x['sold_' + l.id], missing: x['missing_' + l.id], location_id: +x.loc, notes: x.notes || null }))
         .filter(r => ['good', 'damaged', 'used', 'sold', 'missing'].some(k => +r[k] > 0));
@@ -424,8 +478,14 @@ async function jobManifest(j, lines, moves = [], secs = [], crew = [], staff = [
       const sec = secs.find(s => s.department_id === d);
       const st = sec?.state || 'pending';
       return { heading: lineName(d), headingNote: st === 'issued' ? `Issued by ${sec.decided_by_name || ''} · ${fdt(sec.decided_at)}` : st === 'rejected' ? 'Rejected · not issued' : 'Waiting for approval · not issued yet',
-        columns, rows: lines.filter(l => l.items?.department_id === d).map(l => ({ n: ++n, code: l.items?.code || '', name: l.items?.name || '', from: locName(l.location_id), qty: fq(l.qty), serials: l.serials || '',
-          back: closed ? fq(tally(l, 'return')) : '', used: closed ? fq(tally(l, 'issue') + tally(l, 'sale')) : '', chk1: '', chk2: '' })) };
+        columns, rows: boxOrder(lines.filter(l => l.items?.department_id === d)).flatMap(l => {
+          const inBox = !!l.box_line_id, isBx = !inBox && typeof isBox === 'function' && isBox(l.item_id);
+          const r = { n: ++n, code: l.items?.code || '', name: (inBox ? '• ' : '') + (l.items?.name || '') + (isBx ? ` (box: ${plural(lines.filter(x => x.box_line_id === l.id).length, 'item')} inside, listed below)` : ''),
+            from: locName(l.location_id), qty: fq(l.qty), serials: l.serials || '', back: closed ? fq(tally(l, 'return')) : '', used: closed ? fq(tally(l, 'issue') + tally(l, 'sale')) : '', chk1: '', chk2: '' };
+          const np = isBx ? boxNotPacked(l, lines).map(c => { const it = S.items?.find(i => i.id === c.item_id);
+            return { n: '', code: it?.code || '', name: `• ${it?.name || ''} (not packed)`, from: '', qty: '0', serials: '', back: '', used: '', chk1: '', chk2: '' }; }) : [];
+          return [r, ...np];
+        }) };
     });
     const pending = secs.filter(s => s.state === 'pending').length;
     const [secEv, rcEv] = await Promise.all([signEvents('job_section', secs.map(s => s.id)), signEvents('job_receipt', j.id)]);

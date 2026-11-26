@@ -2283,3 +2283,14 @@ td.num input.mr-qty.saved { background: #EEF6EF; border-color: #6FB27D; }
 .notice.mr-dups { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
 .mr-onreq { color: var(--brand); }
 @media (max-width: 640px) { .mr-find { flex-wrap: wrap; } .mr-find input { max-width: none; } td.num input.mr-qty { width: 96px; } }
+
+/* 3.0.16 boxes */
+.boxp h2 svg { width: 18px; height: 18px; vertical-align: -3px; margin-right: 6px; color: var(--muted); }
+.boxp .small { font-size: 13px; }
+tr.mr-in td.full, .rettbl tr.mr-in td:first-child { padding-left: 34px; position: relative; }
+.mr-inmark { position: absolute; left: 14px; color: var(--muted); font-size: 13px; }
+tr.mr-box td { background: #FAFAFB; }
+tr.mr-np td { color: var(--muted); } tr.mr-np .name { text-decoration: line-through; text-decoration-color: rgba(0,0,0,.25); }
+label.mr-pack { font-size: 13px; font-weight: 500; gap: 6px; white-space: nowrap; margin: 0; }
+.mr-allback { margin-top: 6px; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; } .mr-allback .btn svg { width: 14px; height: 14px; }
+@media (max-width: 640px) { tr.mr-in td.full { padding-left: 30px; } .mr-inmark { left: 10px; } }
