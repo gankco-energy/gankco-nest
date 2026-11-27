@@ -643,10 +643,15 @@ function openMeMenu(btn) {
   $('[data-out]', m).onclick = () => { close(); sb.auth.signOut(); };
 }
 
+// 3.0.16 fix: the final signature on reports is given by the approver chosen in Inventory settings (or the backup), else the Developer
+const soApprovers = () => [setting('report_approver', null), setting('report_approver_backup', null)]
+  .filter((id, i, a) => id && a.indexOf(id) === i && S.people?.[id] && ['staff', 'superadmin'].includes(S.people[id].role) && appRoleOf(S.people[id], 'inventory'));
+const soFinalSigners = () => soApprovers().length ? soApprovers() : Object.values(S.people || {}).filter(p => p.role === 'superadmin').map(p => p.id);
+const soApproverTitle = () => soApprovers().length ? (String(setting('report_approver_title', '') || '').trim() || 'GM Engineering & Operations') : 'Developer';
 function canSignReport(r) {
   const me = S.viewAs ? null : S.profile.id;
   if (r.status === 'review') return !isSuper() && isAdmin() && r.department_id != null && canApprove(r.department_id) && r.prepared_by !== me;
-  if (r.status === 'approval') return isSuper();
+  if (r.status === 'approval') return !!me && soFinalSigners().includes(me) && !(r.prepared_by === me && soFinalSigners().some(x => x !== me));
   return false;
 }
 

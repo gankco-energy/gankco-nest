@@ -499,6 +499,9 @@ ROUTES.settings = {
     settingsAccordion(main, 'settings');
     if (location.hash.includes('#svc')) setTimeout(() => $('#svc', main)?.scrollIntoView({ block: 'start' }), 50); }
 };
+// people who can give the final signature on reports: active, with Inventory access
+const soPeopleOptions = sel => Object.values(S.people).filter(p => ['staff', 'superadmin'].includes(p.role) && appRoleOf(p, 'inventory'))
+  .sort((a, b) => (a.full_name || a.email).localeCompare(b.full_name || b.email)).map(p => opt(p.id, `${p.full_name || p.email}${p.job_title ? ' · ' + p.job_title : ''}`, sel || '')).join('');
 // Inventory settings (2.8): count dates, warnings and the QMS form details
 ROUTES.invsettings = {
   async load() {
@@ -512,6 +515,13 @@ ROUTES.invsettings = {
       <section class="panel"><header><h2>Alerts</h2><span class="meta">Kits ${s('kit_warn_days')} days ahead · certificates ${s('cert_warn_days')} days ahead</span></header><div class="body">
         <div class="row2"><label class="f">Warn about kit expiry (days ahead)<input type="number" min="1" name="kit_warn_days" value="${s('kit_warn_days')}"></label>
         <label class="f">Warn about certificates (days ahead)<input type="number" min="1" name="cert_warn_days" value="${s('cert_warn_days')}"></label></div><div class="acc-save"><button class="btn primary" type="submit">Save settings</button></div></div></section>
+      <section class="panel" id="rso"><header><h2>Report sign-off</h2><span class="meta">${soApprovers().length ? 'Final signature: ' + esc(soFinalSigners().map(id => personName(id)).join(' or ')) : 'Final signature: the Developer (nobody chosen yet)'}</span></header><div class="body">
+        <p class="muted">Monthly and quarterly inventory reports are signed by the preparer, then (for one service line) that line’s admin, then the final approver below. Choose people with Inventory access and a signature on their Account page.</p>
+        <label class="f">Title on the signature box<input type="text" name="report_approver_title" value="${esc(setting('report_approver_title', '') || 'GM Engineering & Operations')}" maxlength="60"></label>
+        <div class="row2"><label class="f">Final approver<select name="report_approver"><option value="">Nobody (the Developer signs)</option>${soPeopleOptions(setting('report_approver', ''))}</select></label>
+        <label class="f">Backup (signs when the approver is away)<select name="report_approver_backup"><option value="">No backup</option>${soPeopleOptions(setting('report_approver_backup', ''))}</select></label></div>
+        <span class="hint">Whoever is chosen is told about any report already waiting for the final signature. The preparer never gives the final signature on their own report when the other one can.</span>
+        <div class="acc-save"><button class="btn primary" type="submit">Save settings</button></div></div></section>
       <section class="panel"><header><h2>QMS form details on reports</h2><span class="meta">${setting('form_ref', '') ? 'Ref ' + s('form_ref') + ' · Rev ' + s('form_revision') : 'Not filled in'}</span></header><div class="body">
         <label class="f">Ref No.<input type="text" name="form_ref" value="${s('form_ref')}"></label>
         <div class="row2"><label class="f">Issue date<input type="text" name="form_issue" value="${s('form_issue')}"></label><label class="f">Revision<input type="text" name="form_revision" value="${s('form_revision')}"></label></div><div class="acc-save"><button class="btn primary" type="submit">Save settings</button></div></div></section></form>`);
@@ -522,7 +532,8 @@ ROUTES.invsettings = {
     f.onsubmit = async e => {
       e.preventDefault(); const d = Object.fromEntries(new FormData(f));
       if (+d.count_open_day > +d.count_close_day) return toast('The count must open before the deadline.', true);
-      const rows = Object.entries(d).map(([key, v]) => ({ key, value: ['form_ref', 'form_issue', 'form_revision'].includes(key) ? String(v) : +v }));
+      if (d.report_approver && d.report_approver === d.report_approver_backup) return toast('Choose a different person as the backup.', true);
+      const rows = Object.entries(d).map(([key, v]) => ({ key, value: ['form_ref', 'form_issue', 'form_revision', 'report_approver_title'].includes(key) ? String(v) : ['report_approver', 'report_approver_backup'].includes(key) ? String(v || '') : +v }));
       try { await q(sb.from('app_settings').upsert(rows)); await loadLookups(); toast('Settings saved'); render({ quiet: true }); } catch (ex) { toast(niceError(ex), true); }
     };
   }
