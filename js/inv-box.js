@@ -85,15 +85,32 @@ async function boxEditForm(box) {
     onOpen: d => {
       draw(d);
       const qi = $('#bx-q', d), res = $('#bx-res', d);
-      const add = i => { if (!rows.some(r => r.item_id === i.id)) rows.push({ item_id: i.id, qty: 1 }); draw(d); qi.value = ''; res.innerHTML = ''; qi.focus(); };
+      // 3.0.16b: an item comes in with how many are in the store now (1 when there are none, so the box shows it as short)
+      const startQty = i => +i.qty_available > 0 ? +i.qty_available : 1;
+      const take = i => { if (i && !rows.some(r => r.item_id === i.id)) { rows.push({ item_id: i.id, qty: startQty(i) }); return 1; } return 0; };
+      const tick = new Set();
+      const add = i => { take(i); draw(d); qi.value = ''; res.innerHTML = ''; qi.focus(); };
       const search = () => {
-        const t = qi.value.trim().toLowerCase(); if (!t) { res.innerHTML = ''; return; }
-        const exact = matchCode(t); if (exact.length === 1 && t.length > 6 && exact[0].id !== box.id && !isBox(exact[0].id)) { add(exact[0]); return; }
-        const hits = S.items.filter(i => i.active && i.id !== box.id && `${i.code || ''} ${i.name}`.toLowerCase().includes(t)).slice(0, 25);
-        res.innerHTML = hits.length ? hits.map(i => { const bx = isBox(i.id), on = rows.some(r => r.item_id === i.id), other = boxesHolding(i.id).filter(c => c.box_id !== box.id);
-          return `<button type="button" class="pick" data-id="${i.id}" ${bx || on ? 'disabled' : ''}>${tag(i.code)} <span>${esc(i.name)}</span>
-            <span class="sub">${bx ? 'This is a box itself' : on ? 'Already in this box' : `${fq(i.qty_available)} in store${other.length ? ' · also in ' + other.map(c => esc(boxName(c.box_id))).join(', ') : ''}`}</span></button>`; }).join('') : '<div class="empty">No match.</div>';
-        $$('[data-id]:not([disabled])', res).forEach(x => x.onclick = () => add(S.items.find(i => i.id === +x.dataset.id)));
+        const t = qi.value.trim().toLowerCase(); if (!t) { res.innerHTML = ''; tick.clear(); return; }
+        const exact = matchCode(t); if (exact.length === 1 && t.length > 6 && exact[0].id !== box.id && !isBox(exact[0].id) && !rows.some(r => r.item_id === exact[0].id)) { add(exact[0]); return; }
+        const all = S.items.filter(i => i.active && i.id !== box.id && `${i.code || ''} ${i.name}`.toLowerCase().includes(t));
+        const hits = all.slice(0, 200), free = hits.filter(i => !isBox(i.id) && !rows.some(r => r.item_id === i.id));
+        [...tick].forEach(id => { if (!free.some(i => i.id === id)) tick.delete(id); });
+        res.innerHTML = hits.length ? `<div class="bx-bar"><label class="check inline"><input type="checkbox" id="bx-all" ${free.length && free.every(i => tick.has(i.id)) ? 'checked' : ''} ${free.length ? '' : 'disabled'}> Select all${free.length ? ` (${free.length})` : ''}</label>
+            <span class="muted">${all.length > 200 ? `First 200 of ${all.length}: type more to narrow it` : plural(hits.length, 'match', 'matches')}</span>
+            <button type="button" class="btn small primary" id="bx-addt">${ico('plus')}Add ticked${tick.size ? ` (${tick.size})` : ''}</button></div>`
+          + hits.map(i => { const bx = isBox(i.id), on = rows.some(r => r.item_id === i.id), other = boxesHolding(i.id).filter(c => c.box_id !== box.id);
+          return `<div class="bx-hit${bx || on ? ' off' : ''}${tick.has(i.id) ? ' t' : ''}"><input type="checkbox" data-tk="${i.id}" ${tick.has(i.id) || on ? 'checked' : ''} ${bx || on ? 'disabled' : ''} aria-label="Tick ${esc(i.name)}">
+            <button type="button" class="pick" data-id="${i.id}" ${bx || on ? 'disabled' : ''} title="Add just this one">${tag(i.code)} <span>${esc(i.name)}</span>
+            <span class="sub">${bx ? 'This is a box itself' : on ? 'Already in this box' : `${fq(i.qty_available)} in store${other.length ? ' · also in ' + other.map(c => esc(boxName(c.box_id))).join(', ') : ''}`}</span></button></div>`; }).join('') : '<div class="empty">No match.</div>';
+        $$('[data-id]:not([disabled])', res).forEach(x => x.onclick = () => { take(S.items.find(i => i.id === +x.dataset.id)); tick.delete(+x.dataset.id); draw(d); search(); });
+        $$('[data-tk]:not([disabled])', res).forEach(c => c.onchange = () => { c.checked ? tick.add(+c.dataset.tk) : tick.delete(+c.dataset.tk); search(); });
+        const sa = $('#bx-all', res); if (sa) sa.onchange = () => { free.forEach(i => sa.checked ? tick.add(i.id) : tick.delete(i.id)); search(); };
+        const at = $('#bx-addt', res); if (at) at.onclick = () => {
+          if (!tick.size) { at.textContent = 'Tick some items first'; return; }
+          let n = 0; [...tick].forEach(id => { n += take(S.items.find(i => i.id === id)); }); tick.clear(); draw(d); search();
+          toast(`Added ${plural(n, 'item')}. Check the quantities, then save.`);
+        };
       };
       qi.oninput = debounce(search, 150);
       qi.onkeydown = e => { if (e.key === 'Enter') { e.preventDefault(); search(); } };
