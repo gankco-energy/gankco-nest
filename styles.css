@@ -2300,3 +2300,12 @@ label.mr-pack { font-size: 13px; font-weight: 500; gap: 6px; white-space: nowrap
 .bx-hit { display: flex; align-items: center; gap: 8px; } .bx-hit > input { width: 17px; height: 17px; flex: none; accent-color: var(--brand); margin: 0 2px 0 4px; }
 .bx-hit .pick { flex: 1; min-width: 0; } .bx-hit.t .pick { border-color: var(--brand); background: #FFF8F4; } .bx-hit.off .pick { opacity: .6; cursor: default; }
 #bx-res { max-height: 340px; }
+/* 3.0.16c: items inside boxes tucked under their box in the Inventory list */
+.inv-boxtog { border: 1px solid var(--line); background: #fff; border-radius: 999px; padding: 1px 9px; margin-left: 8px; font: inherit; font-size: 12px; font-weight: 600; color: var(--brand); cursor: pointer; white-space: nowrap; vertical-align: 1px; }
+.inv-boxtog:hover { border-color: var(--brand); background: #FFF8F4; }
+@media (min-width: 761px) {
+  table.inv tr.inv-box td { background: #FAFAFB; }
+  table.inv tr.inv-kid td.desc { padding-left: 30px; position: relative; } .inv-inmark { position: absolute; left: 12px; color: var(--muted); }
+  table.inv tr.inv-kid td { background: #FCFCFD; }
+}
+@media (max-width: 760px) { table.inv tr.inv-kid { margin-left: 14px; border-left: 3px solid #E3E7EB; } .inv-inmark { color: var(--muted); margin-right: 4px; } .inv-boxtog { display: inline-block; margin: 4px 0 0; } }

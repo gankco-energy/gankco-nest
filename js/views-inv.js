@@ -192,7 +192,7 @@ ROUTES.dashboard = {
 // ================================================================ INVENTORY
 ROUTES.inventory = {
   async load(parts, params) {
-    const f = S.inv;
+    const f = S.inv; f.open = f.open || new Set();   // 3.0.16c: boxes opened in the list
     if (params.get('v')) f.view = params.get('v');
     if (params.get('q') !== null) f.q = params.get('q');
     if ([...params.keys()].length) history.replaceState(null, '', '#/inventory');
@@ -255,12 +255,38 @@ ROUTES.inventory = {
       return true;
     });
   },
+  // 3.0.16c: items that are all inside a box are tucked under it (in the All and In store views, not while editing).
+  // Search still finds them, under their box. Exports, counts and the other views list every item.
+  boxLayout(rows) {
+    const f = S.inv;
+    const on = typeof boxesHolding === 'function' && (f.view === 'all' || f.view === 'available') && !f.edit;
+    const loose = id => (S.stock || []).filter(x => x.item_id === id && x.status === 'available' && +x.qty > 0).reduce((a, x) => a + looseOf(id, x.location_id), 0);
+    const tucked = new Set(on ? rows.filter(i => boxesHolding(i.id).length && loose(i.id) <= 0).map(i => i.id) : []);
+    const byId = new Map(this.rows.map(i => [i.id, i]));
+    const q = f.q.trim(), placed = new Set(), out = [];
+    // a search that finds an item tucked inside a box shows that box too, with the item under it
+    const need = new Set(q ? rows.filter(i => tucked.has(i.id)).flatMap(i => boxesHolding(i.id).map(c => c.box_id)) : []);
+    const inRows = new Set(rows.filter(i => !tucked.has(i.id)).map(i => i.id));
+    this.rows.filter(i => inRows.has(i.id) || (need.has(i.id) && i.active)).forEach(i => {
+      out.push({ i });
+      if (!on || !isBox(i.id)) return;
+      const kids = f.open.has(i.id) ? boxContents(i.id).map(c => byId.get(c.item_id)).filter(Boolean)
+        : q ? rows.filter(k => tucked.has(k.id) && boxesHolding(k.id).some(c => c.box_id === i.id)) : [];
+      kids.forEach(k => { out.push({ i: k, kid: i.id }); placed.add(k.id); });
+    });
+    // found by the search, but their box isn't in the list
+    if (q) rows.filter(i => tucked.has(i.id) && !placed.has(i.id)).forEach(i => out.push({ i, orphan: true }));
+    return { out, tuckedN: [...tucked].filter(id => !placed.has(id)).length, top: out.filter(x => !x.kid).length };
+  },
   draw(main) {
-    const rows = this.filtered(); const sel = S.inv.sel; const f = S.inv;
-    $('#shown', main).textContent = `${rows.length} shown`;
+    const all = this.filtered(); const sel = S.inv.sel; const f = S.inv;
+    const lay = this.boxLayout(all); const rows = lay.out.filter(x => !x.kid).map(x => x.i);
+    this.shownIds = lay.out.map(x => x.i.id);
+    $('#shown', main).innerHTML = `${lay.out.length} shown${lay.tuckedN ? ` <span class="muted">· ${plural(lay.tuckedN, 'more item')} inside boxes (open a box, or search)</span>` : ''}`;
     const fc = $('#f-clear', main); if (fc) fc.hidden = !(f.svc || f.sub || f.kind || f.st || f.kit || f.loc || f.moved);
-    const shownRows = rows.slice(0, 800);
-    $('#tbl tbody', main).innerHTML = shownRows.length ? shownRows.map(i => {
+    const topRows = rows.slice(0, 800); const cut = new Set(topRows.map(i => i.id));
+    const shownRows = lay.out.filter(x => x.kid ? cut.has(x.kid) : cut.has(x.i.id) || x.orphan);
+    $('#tbl tbody', main).innerHTML = shownRows.length ? shownRows.map(({ i, kid }) => {
       const editable = f.edit && canAct(i.department_id);
       const cells = this.locCols.map(l => {
         const v = stockOf(i.id, l.id); const key = `${i.id}:${l.id}`;
@@ -268,17 +294,18 @@ ROUTES.inventory = {
         if (editable) return `<td class="num loccell"><input type="number" min="0" step="any" class="qin ${changed ? 'changed' : ''}" data-k="${key}" value="${changed ? f.changes.get(key) : v}" aria-label="${esc(l.name)} quantity for ${esc(i.name)}"><span class="qlbl">${esc(l.is_placeholder ? 'Not set' : l.name)}</span></td>`;
         return `<td class="num loccell ${v ? '' : 'zero'}">${v ? `<b>${fq(v)}</b>` : '·'}<span class="qlbl">${esc(l.is_placeholder ? 'Not set' : l.name)}</span></td>`;
       }).join('');
-      return `<tr class="${f.edit ? '' : 'click'} ${f.edit && !editable ? 'locked' : ''}" data-id="${i.id}">
+      const bx = typeof isBox === 'function' && isBox(i.id) && (f.view === 'all' || f.view === 'available') && !f.edit;
+      return `<tr class="${f.edit ? '' : 'click'} ${f.edit && !editable ? 'locked' : ''}${kid ? ' inv-kid' : ''}${bx ? ' inv-box' : ''}" data-id="${i.id}">
       <td class="cb"><input type="checkbox" data-sel="${i.id}" ${sel.has(i.id) ? 'checked' : ''} aria-label="Select ${esc(i.name)}"></td>
       <td class="codecell">${tag(i.code)}</td>
-      <td class="full desc"><div class="name">${f.edit ? `<a href="#/item/${i.id}">${esc(i.name)}</a>` : esc(i.name)}</div><div class="sub">${esc(invPlace(i))}${i.is_kit ? ' · Kit' : ''}${typeof isBox === 'function' && isBox(i.id) ? ` · Box: ${plural(boxContents(i.id).length, 'item')} inside` : ''}${typeof boxesHolding === 'function' && boxesHolding(i.id).length ? ` · In ${esc(boxesHolding(i.id).map(c => boxName(c.box_id)).join(', '))}` : ''}</div></td>
+      <td class="full desc"><div class="name">${kid ? '<span class="inv-inmark" aria-hidden="true">↳</span>' : ''}${f.edit ? `<a href="#/item/${i.id}">${esc(i.name)}</a>` : esc(i.name)}${bx ? ` <button type="button" class="inv-boxtog" data-boxopen="${i.id}" aria-expanded="${f.open.has(i.id)}">${f.open.has(i.id) ? 'Hide' : 'Show'} ${plural(boxContents(i.id).length, 'item')} inside ${f.open.has(i.id) ? '▾' : '▸'}</button>` : ''}</div><div class="sub">${esc(invPlace(i))}${i.is_kit ? ' · Kit' : ''}${typeof isBox === 'function' && isBox(i.id) ? ` · Box: ${plural(boxContents(i.id).length, 'item')} inside` : ''}${typeof boxesHolding === 'function' && boxesHolding(i.id).length ? ` · In ${esc(boxesHolding(i.id).map(c => boxName(c.box_id)).join(', '))}${(() => { const l = (S.stock || []).filter(x => x.item_id === i.id && x.status === 'available' && +x.qty > 0).reduce((a, x) => a + looseOf(i.id, x.location_id), 0); return l > 0 ? ` · ${fq(l)} loose` : ''; })()}` : ''}</div></td>
       ${cells}
       <td class="num outcell ${+i.qty_out ? '' : 'zero'}">${+i.qty_out ? `<b>${fq(i.qty_out)}</b>` : '·'}<span class="qlbl">Out</span></td>
       <td class="full chips">${statusChips(i)}</td>
       <td class="num hide-m">${fq(i.qty_total)}</td></tr>`;
     }).join('') + (rows.length > 800 ? `<tr><td colspan="${6 + this.locCols.length}" class="empty">Showing the first 800. Narrow the search to see the rest.</td></tr>` : '')
       : `<tr><td colspan="${6 + this.locCols.length}" class="empty">No items match these filters.${S.inv.q ? ' Check the spelling or clear the search.' : ''}</td></tr>`;
-    $('#all', main).checked = rows.length > 0 && rows.every(r => sel.has(r.id));
+    $('#all', main).checked = this.shownIds.length > 0 && this.shownIds.every(id => sel.has(id));
     this.drawBulk(main); this.drawEditBar(main);
   },
   drawBulk(main) {
@@ -332,6 +359,8 @@ ROUTES.inventory = {
     $$('#seg button', main).forEach(b => b.onclick = () => { f.view = b.dataset.v; $$('#seg button', main).forEach(x => x.classList.toggle('on', x === b)); redraw(); });
     const tb = $('#tbl tbody', main);
     tb.onclick = e => {
+      const tog = e.target.closest('[data-boxopen]');
+      if (tog) { const id = +tog.dataset.boxopen; f.open.has(id) ? f.open.delete(id) : f.open.add(id); e.stopPropagation(); redraw(); return; }
       const cb = e.target.closest('[data-sel]');
       if (cb) { const id = +cb.dataset.sel; cb.checked ? f.sel.add(id) : f.sel.delete(id); this.drawBulk(main); e.stopPropagation(); return; }
       if (f.edit || e.target.closest('td.cb') || e.target.closest('a')) return;
@@ -345,7 +374,7 @@ ROUTES.inventory = {
       else { f.changes.set(inp.dataset.k, v); inp.classList.add('changed'); }
       this.drawEditBar(main);
     };
-    $('#all', main).onchange = e => { this.filtered().forEach(r => e.target.checked ? f.sel.add(r.id) : f.sel.delete(r.id)); redraw(); };
+    $('#all', main).onchange = e => { (this.shownIds || []).forEach(id => e.target.checked ? f.sel.add(id) : f.sel.delete(id)); redraw(); };
     $('#xls', main).onclick = () => exportInventory('xlsx', this.filtered());
     $('#pdf', main).onclick = () => exportInventory('pdf', this.filtered());
     $('#tpl', main).onclick = templatesMenu;
