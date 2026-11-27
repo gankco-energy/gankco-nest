@@ -2309,3 +2309,8 @@ label.mr-pack { font-size: 13px; font-weight: 500; gap: 6px; white-space: nowrap
   table.inv tr.inv-kid td { background: #FCFCFD; }
 }
 @media (max-width: 760px) { table.inv tr.inv-kid { margin-left: 14px; border-left: 3px solid #E3E7EB; } .inv-inmark { color: var(--muted); margin-right: 4px; } .inv-boxtog { display: inline-block; margin: 4px 0 0; } }
+/* 3.0.16 fix */
+.bx-warn { margin-top: 4px; font-size: 12.5px; color: #8A5300; background: #FFF6E0; border: 1px solid #F2D48A; border-radius: var(--radius-s); padding: 4px 8px; }
+#bx-rows tr.bx-new td { background: #FFF4D6; transition: background 1s; }
+#bx-rows thead th { position: sticky; top: 0; z-index: 3; background: #F6F7F9; }
+#bx-rows table { border-collapse: separate; border-spacing: 0; }

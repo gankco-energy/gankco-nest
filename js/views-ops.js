@@ -74,6 +74,12 @@ function editJob(j, after) {
 // ---------------------------------------------------------------- 3.0.15c: request lines: quantities, duplicates, search
 // the "In store now" cell: a warning when the store has less than the request asks for
 function mrStoreCell(l, st, lines = []) {
+  // 3.0.16 fix: the same item from the same store on several lines (in two boxes, or in a box and on its own) is added up
+  const same = lines.filter(x => x.item_id === l.item_id && x.location_id === l.location_id && !x.checkout_id);
+  if (same.length > 1 && st !== 'rejected' && st !== 'issued') {
+    const tot = same.reduce((a, x) => a + +x.qty, 0), have = stockOf(l.item_id, l.location_id);
+    if (tot > have) return chip('overdue', `${fq(tot)} on this request · ${fq(have)} in store`) + `<div class="sub">On it ${same.length} times: untick one</div>`;
+  }
   // 3.0.16: an item on its own can only take what's loose (not inside a box that stays in the store)
   const inside = !l.box_line_id && typeof boxReserved === 'function' ? boxReserved(l.item_id, l.location_id, lines) : 0;
   const n = inside ? looseOf(l.item_id, l.location_id, lines) : stockOf(l.item_id, l.location_id);
@@ -94,8 +100,8 @@ function bindMrLines(main, j, lines) {
       if (v === '' || !(n >= 0)) { inp.value = +l.qty; return; }
       if (n === +l.qty) return;
       if (n === 0) {
-        if (!confirm(`Remove ${l.items?.name || 'this item'} from the request?`)) { inp.value = +l.qty; return; }
-        try { await q(sb.from('job_lines').delete().eq('id', l.id)); toast('Removed'); render({ quiet: true }); } catch (e) { toast(niceError(e), true); inp.value = +l.qty; }
+        if (!l.box_line_id && !confirm(`Remove ${l.items?.name || 'this item'} from the request?`)) { inp.value = +l.qty; return; }
+        try { await q(sb.from('job_lines').delete().eq('id', l.id)); toast(l.box_line_id ? 'Not packed: tick Packed to put it back' : 'Removed'); render({ quiet: true }); } catch (e) { toast(niceError(e), true); inp.value = +l.qty; }
         return;
       }
       inp.disabled = true;
@@ -168,6 +174,8 @@ ROUTES.job = {
     const draft = j.status === 'draft';
     // 3.0.15c: change quantities on a draft; one line per item and store
     const editQty = draft && !readOnly();
+    // 3.0.16 fix: a request waiting for approval that no service line has acted on can go back to draft to be changed
+    const canBack = j.status === 'submitted' && !S.viewAs && secs.every(s => s.state === 'pending') && (isSuper() || j.requester_id === S.profile.id || j.created_by === S.profile.id || invAdminReal());
     const dups = draft ? mrDuplicates(lines) : [];
     const canReturn = ['out', 'partial'].includes(j.status) && lines.some(l => l.checkouts && !l.checkouts.closed_at);
     const isRequester = !S.viewAs && j.requester_id === S.profile.id;
@@ -191,7 +199,7 @@ ROUTES.job = {
       // what's in the box but not on the request
       const rest = np.map(c => { const it = S.items?.find(i => i.id === c.item_id);
         return `<tr data-line="np${l.id}-${c.item_id}" data-find="${esc(`${it?.code || ''} ${it?.name || ''} ${l.items?.name || ''}`.toLowerCase())}" class="mr-in mr-np"><td class="full"><span class="mr-inmark" aria-hidden="true">↳</span>${tag(it?.code)} <span class="name">${esc(it?.name || '')}</span></td>
-          <td>${esc(locName(l.location_id))}</td><td class="num"><span class="muted">${fq(+c.qty * +l.qty)}</span></td><td></td>
+          <td>${esc(locName(l.location_id))}</td><td class="num"><b class="muted">0</b><div class="sub">box holds ${fq(+c.qty * +l.qty)}</div></td><td></td>
           ${st === 'issued' ? `<td colspan="5" class="sub">Not packed: stayed in the store</td>` : `<td class="num">${fq(stockOf(c.item_id, l.location_id))}</td>
           <td class="num">${draft ? `<label class="check inline mr-pack"><input type="checkbox" data-pack="${l.id}:${c.item_id}" ${editQty ? '' : 'disabled'}> Packed</label>` : chip('muted', 'Not packed')}</td>`}</tr>`; }).join('');
       return { row, rest };
@@ -228,6 +236,7 @@ ROUTES.job = {
         ${canReturn ? `<button class="btn tagbtn" id="ret">${ico('out')}Record return</button>` : ''}
         ${secs.some(s => s.state === 'issued') ? `<button class="btn" id="manifest">${ico('pdf')}Load-out Manifest (PDF)</button>` : ''}
         ${draft ? '<button class="btn danger" id="cancel">Cancel request</button>' : ''}
+        ${canBack ? `<button class="btn" id="backdraft">${ico('undo')}Back to draft</button>` : ''}
       </div>
       ${draft ? `<div class="notice">Draft: nothing has left the store. Add the items, then press <b>Submit request</b>. Each service line’s main or backup admin approves and issues its own items${isSuper() ? ' (as the Developer, yours are issued as soon as you submit)' : ''}.</div>` : ''}
       ${j.status === 'partial' ? `<div class="notice">Partly issued: some service lines have issued their items; others are still waiting for their admin.${isRequester ? ' You can confirm receipt once every line has been issued or rejected.' : ''}</div>` : ''}
@@ -247,6 +256,10 @@ ROUTES.job = {
     if (b('#add')) b('#add').onclick = () => addJobItems(j, lines);
     bindMrLines(main, j, lines);
     if (b('#edit')) b('#edit').onclick = () => editJob(j);
+    if (b('#backdraft')) b('#backdraft').onclick = async () => {
+      if (!confirm(`Take ${j.job_no} back to draft? It stops waiting for approval so its items can be changed. Submit it again afterwards.`)) return;
+      try { await q(sb.rpc('request_back_to_draft', { p_job: j.id })); toast(`${j.job_no} is a draft again`); render({ quiet: true }); } catch (e) { toast(niceError(e), true); }
+    };
     if (b('#dev-rev')) b('#dev-rev').onclick = () => devConfirm({ title: `Reverse ${j.job_no}`, expect: j.job_no, submit: 'Reverse & remove', sub: 'Stock goes back to how it was before this request, and the request is removed from every list.',
       run: async c => { await q(sb.rpc('dev_reverse_request', { p_job: j.id, p_confirm: c })); toast(`${j.job_no} reversed`); go('#/jobs'); } });
     if (b('#cancel')) b('#cancel').onclick = async () => { if (!confirm('Cancel this request? Nothing has gone out, so nothing changes in stock.')) return; try { await q(sb.from('jobs').update({ status: 'cancelled' }).eq('id', j.id)); toast('Request cancelled'); render(); } catch (e) { toast(niceError(e), true); } };

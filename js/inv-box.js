@@ -67,16 +67,20 @@ function bindBoxPanels(main, it) {
 async function boxEditForm(box) {
   await Promise.all([items(), boxLoad(true), stockRows()]);
   const rows = boxContents(box.id).map(c => ({ item_id: c.item_id, qty: +c.qty }));
+  const fresh = new Set();   // just added: highlighted and scrolled into view
   const draw = d => {
     const t = $('#bx-rows', d);
     t.innerHTML = rows.length ? `<table class="t"><thead><tr><th>Item</th><th class="num">How many in the box</th><th></th></tr></thead><tbody>${rows.map((r, k) => { const i = boxItem(r.item_id);
-      return `<tr><td>${tag(i?.code)} ${esc(i?.name || '')}<div class="sub">${fq(i?.qty_available || 0)} in store${i && i.department_id !== box.department_id ? ' · ' + esc(lineShort(i.department_id)) : ''}</div></td>
+      const others = boxesHolding(r.item_id).filter(c => c.box_id !== box.id), need = others.reduce((a, c) => a + +c.qty, 0) + (+r.qty || 0), have = (+i?.qty_available || 0) + (+i?.qty_out || 0);
+      const warn = others.length && need > have ? `<div class="bx-warn">Also in ${esc(others.map(c => boxName(c.box_id)).join(', '))}: the boxes need ${fq(need)}, GANKCO has ${fq(have)}. Both boxes on one request would ask for it twice.</div>` : '';
+      return `<tr class="${fresh.has(r.item_id) ? 'bx-new' : ''}"><td>${tag(i?.code)} ${esc(i?.name || '')}<div class="sub">${fq(i?.qty_available || 0)} in store${i && i.department_id !== box.department_id ? ' · ' + esc(lineShort(i.department_id)) : ''}${others.length && !warn ? ' · also in ' + esc(others.map(c => boxName(c.box_id)).join(', ')) : ''}</div>${warn}</td>
         <td class="num"><input type="number" min="0" step="any" value="${esc(r.qty)}" data-bq="${k}" style="width:84px" aria-label="How many ${esc(i?.name || '')}"></td>
         <td class="num"><button type="button" class="btn small link danger" data-brm="${k}">Take out</button></td></tr>`; }).join('')}</tbody></table>`
       : '<div class="empty">Nothing inside yet. Search below and add what lives in this box.</div>';
-    $$('[data-bq]', t).forEach(x => x.oninput = () => { rows[+x.dataset.bq].qty = x.value; });
+    $$('[data-bq]', t).forEach(x => { x.oninput = () => { rows[+x.dataset.bq].qty = x.value; }; x.onchange = () => draw(d); });
     $$('[data-brm]', t).forEach(b => b.onclick = () => { rows.splice(+b.dataset.brm, 1); draw(d); });
     $('#bx-n', d).textContent = plural(rows.length, 'item');
+    const nw = $('tr.bx-new', t); if (nw) { nw.scrollIntoView({ block: 'nearest' }); setTimeout(() => { fresh.clear(); $$('tr.bx-new', t).forEach(x => x.classList.remove('bx-new')); }, 2500); }
   };
   return modal({ title: `What’s inside: ${box.name}`, wide: true, submit: 'Save contents',
     sub: 'The items that live in this box and how many of each. They go with the box on every materials request. They stay as items of their own in Inventory.',
@@ -87,7 +91,7 @@ async function boxEditForm(box) {
       const qi = $('#bx-q', d), res = $('#bx-res', d);
       // 3.0.16b: an item comes in with how many are in the store now (1 when there are none, so the box shows it as short)
       const startQty = i => +i.qty_available > 0 ? +i.qty_available : 1;
-      const take = i => { if (i && !rows.some(r => r.item_id === i.id)) { rows.push({ item_id: i.id, qty: startQty(i) }); return 1; } return 0; };
+      const take = i => { if (i && !rows.some(r => r.item_id === i.id)) { rows.push({ item_id: i.id, qty: startQty(i) }); fresh.add(i.id); return 1; } return 0; };
       const tick = new Set();
       const add = i => { take(i); draw(d); qi.value = ''; res.innerHTML = ''; qi.focus(); };
       const search = () => {
